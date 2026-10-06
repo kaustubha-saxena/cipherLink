@@ -1,0 +1,12 @@
+CipherLink — information and decisions needed from you
+
+1. Confirm whether a 10-minute room expiry is acceptable, or provide the session duration you want.
+2. Provide the public hosting domain(s) for the frontend and backend when you are ready to test from different networks. Until then the project is configured for localhost.
+3. For use from a second device on the same Wi-Fi/LAN, provide the development computer's LAN IP when you want me to prepare the exact frontend environment setting and CORS origin. The README explains the current setup.
+4. Confirm whether the temporary security code should remain six digits or use a longer code for the final version.
+5. Confirm whether users need named/display identities in the chat, or whether anonymous “You / Partner” labels are sufficient.
+6. Provide any preferred CipherLink logo, colors, or university/department branding to replace the current prototype styling.
+7. When moving beyond Phase 4, confirm that Phase 5 should use browser-side X25519 + HKDF + AES-256-GCM so the FastAPI server only relays ciphertext. The attached process document calls out this choice because the synopsis also mentions Python cryptography.
+8. Provide the approved sample images and test message sizes for the later image-analysis and benchmarking phases.
+
+Current known limitation: Phase 4 deliberately sends plaintext through the backend. Do not use it for confidential messages until browser-side encryption is implemented in Phase 5 onward.
