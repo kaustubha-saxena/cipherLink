@@ -79,7 +79,9 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [room?.expires_at, view]);
 
-  useEffect(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   async function createRoom() {
     setError(""); setBusy(true);
