@@ -31,4 +31,22 @@ def initialize_database() -> None:
             """
         )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_sessions_code_hash ON sessions(security_code_hash)")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chain_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                session_id TEXT,
+                created_at TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor_id TEXT,
+                details_json TEXT NOT NULL,
+                previous_hash TEXT NOT NULL,
+                entry_hash TEXT NOT NULL,
+                UNIQUE (chain_id, sequence)
+            )
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_session ON audit_logs(session_id, sequence)")
 

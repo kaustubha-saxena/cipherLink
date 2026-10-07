@@ -1,12 +1,15 @@
-CipherLink — information and decisions needed from you
+﻿CipherLink - outstanding information
 
-1. Confirm whether a 10-minute room expiry is acceptable, or provide the session duration you want.
-2. Provide the public hosting domain(s) for the frontend and backend when you are ready to test from different networks. Until then the project is configured for localhost.
-3. For use from a second device on the same Wi-Fi/LAN, provide the development computer's LAN IP when you want me to prepare the exact frontend environment setting and CORS origin. The README explains the current setup.
-4. Confirm whether the temporary security code should remain six digits or use a longer code for the final version.
-5. Confirm whether users need named/display identities in the chat, or whether anonymous “You / Partner” labels are sufficient.
-6. Provide any preferred CipherLink logo, colors, or university/department branding to replace the current prototype styling.
-7. When moving beyond Phase 4, confirm that Phase 5 should use browser-side X25519 + HKDF + AES-256-GCM so the FastAPI server only relays ciphertext. The attached process document calls out this choice because the synopsis also mentions Python cryptography.
-8. Provide the approved sample images and test message sizes for the later image-analysis and benchmarking phases.
+No outstanding questions. The requirements and preferences have been answered in ans.txt.
 
-Current known limitation: Phase 4 deliberately sends plaintext through the backend. Do not use it for confidential messages until browser-side encryption is implemented in Phase 5 onward.
+Recorded implementation notes:
+- Rooms and unjoined security codes expire after 10 minutes.
+- After joining, a room ends when a participant disconnects or the connection is lost.
+- Use localhost for development and environment variables for API/WebSocket URLs and CORS. Do not hard-code a LAN IP.
+- Use a six-digit cryptographically random temporary room code; it is not an encryption key.
+- Use anonymous You / Partner labels by default, with optional temporary session-only display names and no permanent accounts.
+- Use a cybersecurity-themed dark navy/black and cyan/blue interface. Do not use official MIT/MAHE branding without approved assets; keep branding free.
+- Use X25519 + HKDF, and show SHA-256 public-key fingerprints for manual verification. Do not present X25519 by itself as identity authentication; avoid paid certificate or identity infrastructure.
+- Use synthetic/public-domain images around 100 KB, 500 KB, 1 MB, 5 MB, and 10 MB. Benchmark text sizes of 1 KB, 10 KB, 100 KB, 500 KB, and 1 MB.
+
+Security note: the Phase 5-13 prototype encrypts chat text and image chunks in the browsers with AES-256-GCM. The key exchange is not authenticated automatically; partners should compare fingerprints through a separate trusted channel. Image transfer is limited to 10 MB. The chat displays a SQLite-backed hash-chain event log and checks its integrity; this detects record edits but is not a signed or externally anchored proof. API request throttling and replay tracking use in-memory state and reset when the backend restarts. Traffic analysis, benchmarks, and broader security testing remain future work.

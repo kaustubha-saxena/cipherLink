@@ -1,0 +1,44 @@
+1. Session expiry:
+   10 minutes for an unjoined room/security code.
+   Once joined, the communication remains active until
+   disconnect, connection loss, or applicable inactivity timeout.
+
+2. 
+  Frontend:
+https://cipherlinkproject.vercel.app/
+
+Backend:
+https://cipherlink-p5ie.onrender.com
+
+3. LAN IP:
+   Do not hard-code one. Use localhost for development and
+   environment variables for API/WebSocket URLs and CORS.
+   Final deployment should use the public backend URL.
+
+4. Security code:
+   6-digit cryptographically random temporary code.
+   Expires after 10 minutes. It is NOT the encryption key.
+
+5. Identity:
+   Default to anonymous "You" / "Partner".
+   Optionally allow a temporary session-only display name.
+   No permanent user-account system is required.
+
+6. Branding:
+   Use a clean cybersecurity-themed CipherLink UI.
+   Dark navy/black + cyan/blue accents.
+   No official MIT/MAHE branding until approved assets are provided.
+   Keep all branding free.
+
+7. Key authentication:
+   Use X25519 + HKDF for key establishment and display
+   SHA-256-based public-key fingerprints for manual verification.
+   Do not claim X25519 alone authenticates identity.
+   No paid certificate/identity infrastructure.
+
+8. Test data:
+   Use synthetic/public-domain images of approximately
+   100 KB, 500 KB, 1 MB, 5 MB and 10 MB.
+   Benchmark text sizes of 1 KB, 10 KB, 100 KB, 500 KB and 1 MB.
+   Use these for encryption, latency, throughput, packet and
+   image-security measurements.

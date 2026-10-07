@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "CipherLink — Secure. Temporary. Private.",
+  title: "CipherLink - Secure. Temporary. Private.",
   description: "Create a temporary CipherLink room or join with a room code.",
 };
 
