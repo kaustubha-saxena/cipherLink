@@ -50,6 +50,7 @@ export default function Home() {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
   const [audit, setAudit] = useState({ records: [], integrity_valid: true, first_bad_record: null });
+  const [cipherRecords, setCipherRecords] = useState([]);
   const [imageProgress, setImageProgress] = useState(null);
   const [fileInputKey, setFileInputKey] = useState(0);
   const socketRef = useRef(null);
@@ -166,6 +167,15 @@ export default function Home() {
         if (payload.type === "pong") { lastPongAt = Date.now(); return; }
         if (payload.type === "message") {
           if (payload.sender_id === identity) return;
+          setCipherRecords((items) => [{
+            id: crypto.randomUUID(),
+            direction: "RECEIVED",
+            kind: "TEXT",
+            sequence: payload.sequence,
+            nonce: payload.nonce,
+            ciphertext: payload.ciphertext,
+            loggedAt: new Date().toISOString(),
+          }, ...items].slice(0, 20));
           const previousSequence = receiveSequencesRef.current.get(payload.sender_id) || 0;
           if (!Number.isSafeInteger(payload.sequence) || payload.sequence <= previousSequence) {
             setSecurityEvents((items) => [{ id: crypto.randomUUID(), label: "REPLAY DETECTED", detail: "A duplicate or out-of-order message was rejected." }, ...items].slice(0, 5));
@@ -187,6 +197,15 @@ export default function Home() {
         }
         if (payload.type === "image_chunk" && payload.sender_id !== identity) {
           const { transfer_id, total_chunks, chunk_index, file_size, file_name, mime_type, sequence } = payload;
+          setCipherRecords((items) => [{
+            id: crypto.randomUUID(),
+            direction: "RECEIVED",
+            kind: `IMAGE ${chunk_index + 1}/${total_chunks}`,
+            sequence,
+            nonce: payload.nonce,
+            ciphertext: payload.ciphertext,
+            loggedAt: new Date().toISOString(),
+          }, ...items].slice(0, 20));
           const previousSequence = receiveSequencesRef.current.get(payload.sender_id) || 0;
           if (!Number.isSafeInteger(sequence) || sequence <= previousSequence) {
             socket.send(JSON.stringify({ type: "security_event", event: "REPLAY_DETECTED", sequence }));
@@ -298,6 +317,7 @@ export default function Home() {
       setRoom({ ...result, joined: true });
       setMessages([]);
       setSecurityEvents([]);
+      setCipherRecords([]);
       setView("room");
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
@@ -319,7 +339,7 @@ export default function Home() {
     socketRef.current?.close();
     for (const url of objectUrlsRef.current) URL.revokeObjectURL(url);
     objectUrlsRef.current.clear(); incomingImagesRef.current.clear();
-    setRoom(null); setMessages([]); setAudit({ records: [], integrity_valid: true, first_bad_record: null }); setCode(""); setError(""); setView("home");
+    setRoom(null); setMessages([]); setAudit({ records: [], integrity_valid: true, first_bad_record: null }); setCipherRecords([]); setCode(""); setError(""); setView("home");
   }
 
   async function sendMessage(event) {
@@ -334,6 +354,15 @@ export default function Home() {
       const encrypted = await encryptText(sessionKeyRef.current, room.id, sequence, text);
       if (socketRef.current?.readyState !== WebSocket.OPEN) throw new Error("The connection was lost before the message could be sent.");
       socketRef.current.send(JSON.stringify({ type: "message", sequence, ...encrypted }));
+      setCipherRecords((items) => [{
+        id: crypto.randomUUID(),
+        direction: "SENT",
+        kind: "TEXT",
+        sequence,
+        nonce: encrypted.nonce,
+        ciphertext: encrypted.ciphertext,
+        loggedAt: new Date().toISOString(),
+      }, ...items].slice(0, 20));
       sendSequenceRef.current = sequence;
       setMessages((items) => [...items, { sender_id: identity, message: text, sent_at: new Date().toISOString(), sequence }]);
       setDraft("");
@@ -364,6 +393,15 @@ export default function Home() {
         const context = `image:${transferId}:${index}:${totalChunks}:${file.name}:${file.type}:${file.size}`;
         const encrypted = await encryptBytes(sessionKeyRef.current, context, bytes);
         socketRef.current.send(JSON.stringify({ type: "image_chunk", sequence, transfer_id: transferId, file_name: file.name, mime_type: file.type, file_size: file.size, chunk_index: index, total_chunks: totalChunks, ...encrypted }));
+        setCipherRecords((items) => [{
+          id: crypto.randomUUID(),
+          direction: "SENT",
+          kind: `IMAGE ${index + 1}/${totalChunks}`,
+          sequence,
+          nonce: encrypted.nonce,
+          ciphertext: encrypted.ciphertext,
+          loggedAt: new Date().toISOString(),
+        }, ...items].slice(0, 20));
         sendSequenceRef.current = sequence;
         setImageProgress({ done: index + 1, total: totalChunks });
       }
@@ -382,7 +420,7 @@ export default function Home() {
         <div className="top-status"><span className="status-dot" /> PRIVATE ROOM PROTOTYPE</div>
       </header>
 
-      <section className="content">
+      <section className={view === "room" ? "content content-wide" : "content"}>
         <div className="eyebrow"><span className="eyebrow-line" /> TEMPORARY CONNECTIONS</div>
         {view === "home" && <>
           <h1>Share a moment.<br /><span>Keep it between you.</span></h1>
@@ -452,12 +490,19 @@ export default function Home() {
               </button>
             </form>
             {imageProgress && <div className="image-progress">Encrypting and sending image  {imageProgress.done}/{imageProgress.total} chunks</div>}
-            </div><aside className="audit-panel" aria-label="Room audit log">
+            </div><div className="room-side-panels"><aside className="audit-panel" aria-label="Room activity log">
               <div className="audit-heading"><div><span>SECURITY</span><h3>Room activity</h3></div><span className="audit-live"><i /> LIVE</span></div>
               <div className={audit.integrity_valid ? "audit-integrity" : "audit-integrity audit-invalid"}><span>{audit.integrity_valid ? "OK" : "!"}</span><div><strong>{audit.integrity_valid ? "HASH CHAIN VERIFIED" : "LOG INTEGRITY FAILURE"}</strong><small>{audit.integrity_valid ? "Recorded events match their audit chain." : `First inconsistent record: #${audit.first_bad_record ?? "?"}`}</small></div></div>
               <div className="audit-list">{audit.records.length === 0 && <p className="audit-empty">Room events will appear here.</p>}{[...audit.records].reverse().map((record) => <div className="audit-record" key={record.sequence}><div><strong>{record.event_type.replaceAll("_", " ")}</strong><time>{new Date(record.created_at).toLocaleTimeString()}</time></div><small>{record.actor_id === identity ? "You" : record.actor_id ? "Room participant" : "Service"}{record.details?.sequence ? `  sequence ${record.details.sequence}` : ""}{record.details?.total_chunks ? `  ${record.details.total_chunks} image chunks` : ""}</small></div>)}</div>
               <p className="audit-note">The audit log records event metadata. Message and image contents remain encrypted.</p>
-            </aside></div>
+            </aside><aside className="cipher-panel" aria-label="Encrypted message log">
+                <div className="cipher-log-heading"><h4>Ciphertext table</h4><span>{cipherRecords.length} / 20</span></div>
+                <p>Both participants see the latest 20 frames. Each browser logs sent and received ciphertext locally for this room.</p>
+                <div className="cipher-table-wrap"><table><thead><tr><th>Time</th><th>Flow</th><th>Seq</th><th>Type</th><th>Ciphertext</th></tr></thead><tbody>
+                  {cipherRecords.length === 0 && <tr><td colSpan={5} className="cipher-empty">No encrypted messages yet.</td></tr>}
+                  {cipherRecords.map((record) => <tr key={record.id}><td>{new Date(record.loggedAt).toLocaleTimeString()}</td><td className={record.direction === "SENT" ? "cipher-sent" : "cipher-received"}>{record.direction}</td><td>{record.sequence}</td><td>{record.kind}</td><td><details><summary>View</summary><code>Nonce: {record.nonce}{"\n"}Ciphertext: {record.ciphertext}</code></details></td></tr>)}
+                </tbody></table></div>
+            </aside></div></div>
           </>}
           {error && <p className="error-message">{error}</p>}
         </div>}
