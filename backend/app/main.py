@@ -194,6 +194,8 @@ async def room_socket(websocket: WebSocket, session_id: str, participant_id: str
         pass
     finally:
         manager.disconnect(session_id, websocket)
-        leave_session(session_id, participant_id)
+        current_session = get_session(session_id)
+        if current_session and current_session["status"] == "active":
+            leave_session(session_id, participant_id)
         await manager.broadcast(session_id, {"type": "participant_left", "sent_at": datetime.now(timezone.utc).isoformat()})
 

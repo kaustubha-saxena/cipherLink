@@ -1,12 +1,13 @@
-﻿# CipherLink
+# CipherLink
 
-CipherLink is a prototype for temporary, code-based sessions and two-person encrypted communication. It implements Phases 1-13 from the step-by-step process: a Next.js interface, FastAPI session management with SQLite, WebSocket relay, browser-side X25519/HKDF key agreement, AES-256-GCM encrypted text and image chunks, disconnect handling, chained audit logs with verification, and API rate limits.
+CipherLink is a prototype for temporary, code-based sessions and two-person encrypted communication. It implements Phases 1-15 from the step-by-step process: a Next.js interface, FastAPI session management with SQLite, WebSocket relay, browser-side X25519/HKDF key agreement, AES-256-GCM encrypted text and image chunks, disconnect handling, chained audit logs, API rate limits, PyShark packet analysis, and a traffic dashboard.
 
 ## Project structure
 
 - `frontend/` - Next.js App Router interface
 - `backend/` - FastAPI REST and WebSocket server, SQLite persistence
-- `traffic-analysis/`, `attack-scripts/`, `benchmarks/`, `image-analysis/`, `docs/` - reserved for later phases
+- `traffic-analysis/` - PyShark live capture, PCAP/PCAPNG analysis, CSV/JSON reports
+- `attack-scripts/`, `benchmarks/`, `image-analysis/`, `docs/` - reserved for later phases
 
 ## Run locally
 
@@ -17,10 +18,27 @@ CipherLink is a prototype for temporary, code-based sessions and two-person encr
 
 The backend stores its SQLite database at `backend/cipherlink.db` by default. Set `CIPHERLINK_DB_PATH` to change it. Rooms last 10 minutes by default; `SESSION_TTL_SECONDS` changes the room lifetime.
 
+## Phases 14-15: capture, analyze, and view traffic
+
+Install Wireshark with TShark on the computer whose network traffic you want to capture. In a PowerShell window at the repository root:
+
+```powershell
+python -m venv traffic-analysis/.venv
+./traffic-analysis/.venv/Scripts/Activate.ps1
+python -m pip install -r traffic-analysis/requirements.txt
+python traffic-analysis/capture.py --list-interfaces
+python traffic-analysis/capture.py --interface "Wi-Fi" --duration 60 --filter "port 443" --output traffic-analysis/cipherlink-test.pcapng
+python traffic-analysis/analyzer.py traffic-analysis/cipherlink-test.pcapng --csv traffic-analysis/cipherlink-packets.csv
+```
+
+Replace `Wi-Fi` with an interface printed by `--list-interfaces`. Start the capture, use CipherLink during the selected interval, then open `/traffic-analysis` in the frontend and load the generated `.analysis.json` report. Live capture may require administrator permissions. Capturing the hosted HTTPS/WSS site normally shows TLS packet sizes, timing, endpoints, and TCP metadata; it does not reveal encrypted chat plaintext. The dashboard uses real capture reports and does not display fabricated metrics.
+
+The analyzer reports packet counts and sizes, protocol counts, endpoint flows, TCP retransmissions, TCP ACK RTT samples, bytes, duration, and throughput. ACK RTT is a transport-level estimate, not application-level end-to-end chat latency. PCAP files and reports may contain IP addresses and timing metadata; keep them private when they include real users.
+
 ## Current scope and security status
 
 Text and image encryption and decryption happen in each browser. The backend relays public X25519 keys and encrypted message envelopes; it does not receive chat plaintext, image bytes, or private keys. AES-GCM uses a random 96-bit nonce and authenticated additional data bound to the room/sequence or image transfer/chunk metadata. Receivers and the relay reject duplicate or out-of-order sequence numbers. Images are limited to 10 MB and sent in encrypted 48 KiB chunks.
 
 The key exchange is not authenticated by the room code or another trusted identity mechanism. The app shows a short key fingerprint; users should compare it through a separate trusted channel. Without that comparison, a malicious relay could substitute public keys.
 
-The chat displays a SQLite-backed SHA-256 hash-chain audit log and checks record consistency. It records event metadata, never message or image contents. It detects edits and interior deletions, but it is not signed or externally anchored and cannot prove that the latest records were not removed. Rate limits and replay tracking use in-process memory and reset when the backend restarts; deployments with multiple backend workers need shared storage for these controls. This is a student prototype, not a security-audited product. Traffic analysis, benchmarks, and broader security testing remain future work.
+The chat displays a SQLite-backed SHA-256 hash-chain audit log and checks record consistency. It records event metadata, never message or image contents. It detects edits and interior deletions, but it is not signed or externally anchored and cannot prove that the latest records were not removed. Rate limits and replay tracking use in-process memory and reset when the backend restarts; deployments with multiple backend workers need shared storage for these controls. This is a student prototype, not a security-audited product. Performance benchmarks, image metrics, and broader security testing remain future work.

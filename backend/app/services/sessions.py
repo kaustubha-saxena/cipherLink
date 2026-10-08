@@ -61,7 +61,7 @@ def create_session(creator_id: str) -> dict:
     return {"id": session_id, "security_code": code, "created_at": iso(created_at), "expires_at": iso(expires_at), "status": "waiting"}
 
 
-def join_session(code: str, participant_id: str) -> dict | None:
+def join_session(code: str, participant_id: str) -> tuple[dict | None, str | None]:
     audit_session_id = None
     audit_reason = None
     result = None
@@ -72,8 +72,12 @@ def join_session(code: str, participant_id: str) -> dict | None:
             audit_reason = "invalid_or_expired_code"
         else:
             audit_session_id = row["id"]
-            if row["status"] != "waiting" or row["creator_id"] == participant_id:
-                audit_reason = "unavailable_or_same_participant"
+            if row["creator_id"] == participant_id:
+                audit_reason = "same_participant"
+            elif row["status"] == "expired":
+                audit_reason = "expired"
+            elif row["status"] != "waiting":
+                audit_reason = "unavailable"
             else:
                 connection.execute("UPDATE sessions SET status = 'active', participant_id = ? WHERE id = ? AND status = 'waiting'", (participant_id, row["id"]))
                 joined = connection.execute("SELECT * FROM sessions WHERE id = ?", (row["id"],)).fetchone()
@@ -82,10 +86,10 @@ def join_session(code: str, participant_id: str) -> dict | None:
         append_audit_log(audit_session_id, "JOIN_ATTEMPT", participant_id)
     if audit_reason:
         append_audit_log(audit_session_id, "JOIN_FAILURE", participant_id, {"reason": audit_reason})
-        return None
+        return None, audit_reason
     if audit_session_id:
         append_audit_log(audit_session_id, "JOIN_SUCCESS", participant_id)
-    return result
+    return result, None
 
 
 def get_session(session_id: str) -> dict | None:

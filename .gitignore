@@ -12,3 +12,8 @@ __pycache__/
 .env
 .env.local
 *.pcap
+
+# Local packet capture reports
+traffic-analysis/captures/
+*.analysis.json
+*.packets.csv

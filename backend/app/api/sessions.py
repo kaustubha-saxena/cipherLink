@@ -34,7 +34,14 @@ def create(payload: CreateSessionRequest, request: Request):
 @router.post("/join")
 def join(payload: JoinSessionRequest, request: Request):
     enforce_rate_limit(request, "session_join", 5)
-    session = join_session(payload.security_code, payload.participant_id)
+    session, failure_reason = join_session(payload.security_code, payload.participant_id)
+    if failure_reason == "same_participant":
+        raise HTTPException(
+            status_code=409,
+            detail="You created this room in this browser profile. Open this same site in a private window, a different browser, or another device using the same backend.",
+        )
+    if failure_reason in {"expired", "unavailable"}:
+        raise HTTPException(status_code=410, detail="This room code has expired or the room has already ended.")
     if not session:
         raise HTTPException(status_code=404, detail="Invalid, expired, or unavailable room code.")
     return session
