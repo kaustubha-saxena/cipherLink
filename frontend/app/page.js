@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { createEphemeralKeyPair, createKeyFingerprint, decryptBytes, decryptText, deriveSessionMaterials, encryptBytes, encryptText } from "@/lib/crypto";
 
@@ -417,7 +418,7 @@ export default function Home() {
         <a className="brand" href="#" onClick={(e) => { e.preventDefault(); leaveRoom(); }} aria-label="CipherLink home">
           <span className="brand-mark">C</span><span>Cipher<span className="brand-light">Link</span></span>
         </a>
-        <div className="top-status"><span className="status-dot" /> PRIVATE ROOM PROTOTYPE</div>
+        <div className="top-status"><a className="analysis-link" href="/traffic-analysis">Traffic analysis</a><span className="status-dot" /> PRIVATE ROOM PROTOTYPE</div>
       </header>
 
       <section className={view === "room" ? "content content-wide" : "content"}>
@@ -466,7 +467,7 @@ export default function Home() {
             </div>}
             {handshakeDetails && <details className="handshake-inspector">
               <summary>Show handshake keys (demonstration only)</summary>
-              <p>A is this browser and B is the partner in this view. These values expose this room's cryptographic secrets. Keep them private and never send them to anyone.</p>
+              <p>A is this browser and B is the partner in this view. These values expose this room&apos;s cryptographic secrets. Keep them private and never send them to anyone.</p>
               <div className="handshake-value"><strong>A private key (PKCS#8 Base64)</strong><code>{handshakeDetails.privateKey}</code></div>
               <div className="handshake-value"><strong>A public key (Base64)</strong><code>{handshakeDetails.publicKey}</code></div>
               <div className="handshake-value"><strong>B public key (Base64)</strong><code>{handshakeDetails.peerPublicKey || "Waiting for partner key..."}</code></div>
@@ -475,7 +476,7 @@ export default function Home() {
             <div className="chat-and-audit"><div className="chat-column">
             <div className="chat-window" aria-live="polite">
               {messages.length === 0 && <div className="empty-chat"><span>*</span><p>Your conversation starts here.</p><small>Only encrypted message data is relayed through the CipherLink server.</small></div>}
-              {messages.map((message, index) => <div className={`message ${message.sender_id === identity ? "own-message" : ""}`} key={`${index}-${message.sent_at}`}><div className="message-label">{message.sender_id === identity ? "YOU" : "PARTNER"}</div>{message.type === "image" ? <div className="message-image"><a href={message.imageUrl} target="_blank" rel="noreferrer"><img src={message.imageUrl} alt={message.file_name} /></a><small>{message.file_name}</small></div> : <div className="message-bubble">{message.message}</div>}</div>)}
+              {messages.map((message, index) => <div className={`message ${message.sender_id === identity ? "own-message" : ""}`} key={`${index}-${message.sent_at}`}><div className="message-label">{message.sender_id === identity ? "YOU" : "PARTNER"}</div>{message.type === "image" ? <div className="message-image"><a href={message.imageUrl} target="_blank" rel="noreferrer"><Image src={message.imageUrl} alt={message.file_name} width={360} height={280} unoptimized style={{ width: "auto", height: "auto", maxWidth: "100%", maxHeight: "280px", objectFit: "contain" }} /></a><small>{message.file_name}</small></div> : <div className="message-bubble">{message.message}</div>}</div>)}
               <div ref={bottomRef} />
             </div>
             {securityEvents.length > 0 && <div className="security-events" aria-live="polite">
