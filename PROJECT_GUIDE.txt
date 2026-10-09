@@ -1,0 +1,257 @@
+CipherLink Project Guide
+=======================
+
+Purpose
+-------
+This guide explains the current files, technologies, data flow, and security
+features in this repository. It describes the implementation as it exists in
+the code; it is not a security audit.
+
+1. Project layout
+-----------------
+
+frontend/                         Next.js and React browser interface
+  app/page.js                     Room creation/join, chat, handshake, image
+                                  transfer, audit and ciphertext panels
+  app/layout.js                   Shared HTML layout and page metadata
+  app/globals.css                 Site styling and responsive layouts
+  app/traffic-analysis/page.js    Dashboard that loads capture JSON reports
+  lib/crypto.js                   Browser key agreement and encryption helpers
+  package.json                    Frontend dependency versions and commands
+
+backend/                          Python API and WebSocket relay
+  app/main.py                     FastAPI app, WebSocket protocol and validation
+  app/api/sessions.py             HTTP room and audit-log routes
+  app/models/session.py           Pydantic request validation models
+  app/database/db.py              SQLite connection and schema
+  app/security/codes.py           Six-digit code generation and hashing
+  app/services/sessions.py        Room lifecycle and database operations
+  app/services/audit.py           Chained audit log creation and verification
+  app/utils/rate_limit.py         In-memory sliding-window request limiter
+  app/websocket/manager.py        Live room sockets and replay tracking
+  requirements.txt                Python backend dependencies
+
+traffic-analysis/                 Wireshark/TShark capture and analysis tools
+  capture.py                      Captures packets to PCAPNG using PyShark
+  analyzer.py                     Parses PCAP/PCAPNG into packet samples
+  metrics.py                      Aggregates samples into dashboard metrics
+  reports.py                      Writes JSON dashboard report and optional CSV
+  requirements.txt                PyShark dependency
+
+README.md                          Setup, run, and traffic-analysis instructions
+do.txt                             Outstanding setup information, if any
+ans.txt                            User answers to setup questions
+
+2. Frontend and its dependencies
+--------------------------------
+
+Next.js 14 provides the web application and App Router. React 18 renders
+interactive components. Dependencies and commands are in frontend/package.json:
+  npm run dev      starts the local development server
+  npm run build    creates a production build
+  npm start        serves that build
+  npm run lint     runs the configured lint command
+
+frontend/app/layout.js loads the global stylesheet and sets title/description.
+frontend/app/globals.css defines the design, chat, responsive styles, logs and
+traffic dashboard.
+
+frontend/app/page.js is the main client-side application. It creates a browser
+participant ID, calls the backend to create/join a room, connects to its
+WebSocket, performs key exchange, sends and receives encrypted text/images,
+renders chat bubbles, and displays the room audit and ciphertext tables. The
+ciphertext table is kept in browser state, not persisted by the backend.
+
+frontend/app/traffic-analysis/page.js lets the user select a JSON report and
+renders its metrics and charts. The browser does not parse PCAP; the Python
+analyzer creates the JSON first.
+
+3. Browser cryptography: frontend/lib/crypto.js
+-----------------------------------------------
+
+The browser Web Crypto API (crypto.subtle) provides cryptographic operations.
+This code runs in each participant's browser, not in the Python server.
+
+createEphemeralKeyPair(): generates an X25519 public/private key pair for a
+room handshake. The public key is sent to the peer through the backend relay;
+the private key stays in the browser. In this prototype the private key is
+exported for display in the demonstration handshake inspector. Exposing a
+private key this way is unsafe for a real messaging application.
+
+deriveSessionMaterials(privateKey, peerPublicKey, sessionId): imports the other
+participant's X25519 public key, computes a shared secret, then uses HKDF with
+SHA-256 to derive a 256-bit AES-GCM session key. The derivation uses a
+room-specific salt and application-specific info string. Both browsers derive
+the same key independently. The shared secret is returned for the demo UI;
+the backend does not calculate it.
+
+createKeyFingerprint(...): hashes the room ID and sorted participant public
+keys, then formats the first eight digest bytes as a short fingerprint. Users
+can compare it over a separate trusted channel. The room code does not
+authenticate the public keys.
+
+encryptText()/decryptText(): encode/decode UTF-8 text and call byte helpers.
+encryptBytes(): makes a fresh random 12-byte nonce and uses AES-256-GCM with a
+128-bit authentication tag. Additional authenticated data binds ciphertext to
+its context (room and sequence for text, transfer/chunk context for image
+data). It returns base64 nonce and ciphertext for JSON transport.
+decryptBytes() uses the corresponding key, nonce, ciphertext and context; a
+failed authentication check rejects decryption. Base64 helpers convert binary
+data to/from strings.
+
+In frontend/app/page.js, outgoing messages are encrypted before socket.send();
+incoming message envelopes are decrypted before being rendered. Images are
+split into chunks in the browser; each chunk is encrypted, sent, decrypted,
+then reassembled by the receiver. The server relays encrypted payloads and
+validates their shape and size; it does not decrypt them.
+
+4. Backend API and room lifecycle
+---------------------------------
+
+backend/app/main.py creates the FastAPI application, configures browser origins
+using CIPHERLINK_ALLOWED_ORIGINS, initializes SQLite at startup, and provides
+GET /health. The /ws/{session_id} endpoint checks room membership; relays public
+key-exchange data and encrypted messages/images; handles ping/pong; rejects
+malformed payloads and duplicate/out-of-order sequences; writes audit metadata;
+and handles disconnects. Images are capped at 10 MiB and 214 chunks. Messages
+and image bytes are not written to SQLite.
+
+backend/app/api/sessions.py defines routes under /session:
+  POST /session/create       create a room
+  POST /session/join         join using a six-digit code
+  GET  /session/{id}         read room status/participants
+  POST /session/{id}/leave   close a room when a participant leaves
+  GET  /session/{id}/logs    read a participant's audit log
+
+Create and join routes apply rate limits. The API returns HTTP errors for bad
+codes, expired/unavailable rooms and unauthorized log access.
+backend/app/models/session.py uses Pydantic to validate fields such as the
+six-digit join code and participant ID length.
+
+backend/app/services/sessions.py creates UUID room IDs, timestamps and expiry,
+sets status (waiting/active/closed/expired), joins the second participant, and
+marks expired rooms. Room lifetime defaults to 600 seconds (10 minutes);
+SESSION_TTL_SECONDS changes it, with a minimum of 60 seconds.
+
+backend/app/security/codes.py uses Python secrets.randbelow to choose a number
+from 0 to 999999 and formats it as six digits. It hashes codes with SHA-256.
+sessions.py checks active/waiting rooms for code collisions and hashes an
+entered code before comparing it. The plain code is returned at creation for
+the creator to share.
+
+backend/app/database/db.py uses Python sqlite3. The default file is
+backend/cipherlink.db; CIPHERLINK_DB_PATH can change its location. SQLite stores:
+  sessions: room ID, SHA-256 code hash, creation/expiry times, status, creator
+            ID and optional second participant ID.
+  audit_logs: event sequence, room, time, event type, actor, JSON metadata,
+              previous hash and current entry hash.
+It does not store message plaintext, images, private keys or AES session keys.
+
+5. WebSocket relay and in-memory state
+--------------------------------------
+
+backend/app/websocket/manager.py keeps live sockets in room sets and broadcasts
+JSON payloads. It also tracks each participant's latest accepted sequence and
+which participants submitted public keys. This is process memory, not SQLite;
+it is lost on backend restart and is not shared by multiple server workers.
+
+Sequence numbers help reject replayed or out-of-order messages. The backend
+relays ciphertext unchanged; the receiving browser decrypts and authenticates
+it with AES-GCM.
+
+6. Audit log and rate limiting
+------------------------------
+
+backend/app/services/audit.py stores event metadata as JSON and calculates a
+SHA-256 hash for each record. Each entry includes the previous entry's hash,
+forming a per-room chain. The first entry starts with 64 zeroes. Log retrieval
+recalculates hashes and checks sequence continuity and previous-hash links.
+Events include room create/join/leave/expiry, key exchange, message-sent
+metadata, image-transfer metadata and security/rate-limit events. Contents of
+messages and images are not logged. A hash chain can reveal edits to checked
+records, but it is not signed or externally anchored and cannot prove the
+latest entries were not removed.
+
+backend/app/utils/rate_limit.py implements a 60-second sliding window using
+in-memory timestamp queues. Create allows 10 attempts per window per client
+address; join allows 5. An address is hashed before it is included in a
+rate-limit audit event. Limits reset on restart and are process-local.
+
+7. Traffic capture and analysis
+------------------------------
+
+PyShark is a Python wrapper around TShark, installed with Wireshark. The tools
+measure packet metadata; they do not decrypt CipherLink messages.
+
+capture.py lists interfaces or captures a chosen interface to PCAPNG, with an
+optional BPF capture filter. Capturing may require operating-system elevated
+permissions. For HTTPS/WSS, a capture normally shows addresses, ports, timing,
+packet sizes and transport details, not chat plaintext.
+
+analyzer.py reads PCAP/PCAPNG through PyShark and extracts packet samples:
+timestamp, protocol, endpoints, frame/TCP payload sizes, retransmission flag,
+and TShark TCP ACK RTT when available. It calls metrics.py and reports.py.
+metrics.py calculates packet counts, bytes, average sizes, duration,
+throughput, protocol and size distributions, per-second timelines, common
+flows, retransmissions and available ACK RTT samples. ACK RTT is a TCP-level
+measurement, not application chat latency. reports.py writes JSON for the
+dashboard and optionally CSV per-packet rows. The /traffic-analysis page loads
+the JSON report in the browser. Captures and CSV files can contain addresses
+and timing data; treat them as potentially sensitive.
+
+README.md contains example commands to install traffic dependencies, capture
+while using the app, analyze the capture and load the generated .analysis.json
+file in the dashboard.
+
+8. Configuration variables
+--------------------------
+
+NEXT_PUBLIC_API_URL (frontend): backend base URL used by the browser; local
+default is http://localhost:8000.
+CIPHERLINK_ALLOWED_ORIGINS (backend): comma-separated allowed browser origins.
+CIPHERLINK_DB_PATH (backend): optional SQLite file path.
+SESSION_TTL_SECONDS (backend): room lifetime in seconds; default 600, minimum
+60.
+
+9. Security boundaries and limitations
+---------------------------------------
+
+Browsers perform X25519 key agreement and AES-GCM encryption/decryption. The
+backend relays public keys and encrypted envelopes and stores room state plus
+audit metadata. Fingerprint comparison can help identify public-key
+substitution only if users compare it through a trusted, separate channel.
+The demo handshake inspector exposes the private key, so this prototype is
+not suitable for real sensitive communication. Rate-limit and replay state
+are in-memory and are not shared across backend workers. The code has not been
+independently security-audited; treat it as an educational prototype.
+
+10. Main data flows
+-------------------
+
+Create a room:
+1. page.js sends creator_id to POST /session/create.
+2. sessions.py creates the room/code, stores room metadata and code hash, and
+   records SESSION_CREATED in the audit chain.
+3. The browser connects to /ws/{room_id} and publishes its X25519 public key.
+
+Join and establish encryption:
+1. The second browser sends the six-digit code and participant ID to
+   POST /session/join.
+2. The backend hashes the code, finds the waiting room, activates it, and logs
+   join events.
+3. Both browsers exchange public keys through the WebSocket relay, compute the
+   same X25519 shared secret and derive the same AES-256-GCM key with HKDF.
+
+Send a message:
+1. The sender encrypts text in crypto.js with AES-GCM and a fresh nonce.
+2. page.js sends sequence, nonce and ciphertext over WebSocket.
+3. main.py validates and relays that envelope and stores MESSAGE_SENT metadata.
+4. The receiver decrypts/authenticates it in crypto.js and displays plaintext
+   locally. The ciphertext table shows envelopes seen by that browser.
+
+Analyze traffic:
+1. capture.py records packets to PCAPNG through TShark.
+2. analyzer.py parses packets and metrics.py summarizes network metadata.
+3. reports.py writes JSON (and optionally CSV); the dashboard loads the JSON.
+
+End of guide.
