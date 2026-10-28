@@ -1,5 +1,6 @@
 import base64
 import binascii
+import math
 import os
 from datetime import datetime, timezone
 
@@ -33,6 +34,10 @@ def decode_base64(value: object) -> bytes:
 
 def valid_integer(value: object, minimum: int, maximum: int | None = None) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= minimum and (maximum is None or value <= maximum)
+
+
+def valid_duration(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 60000 and math.isfinite(value)
 
 
 @app.on_event("startup")
@@ -76,8 +81,10 @@ async def room_socket(websocket: WebSocket, session_id: str, participant_id: str
             if payload_type == "key_exchange":
                 public_key = payload.get("public_key")
                 public_key_bytes = decode_base64(public_key)
-                if len(public_key_bytes) != 32:
-                    await websocket.send_json({"type": "error", "detail": "Invalid X25519 public key."})
+                signing_public_key = payload.get("signing_public_key")
+                signing_public_key_bytes = decode_base64(signing_public_key)
+                if len(public_key_bytes) != 32 or len(signing_public_key_bytes) != 65 or signing_public_key_bytes[0] != 4:
+                    await websocket.send_json({"type": "error", "detail": "Invalid key-exchange public key."})
                     continue
                 is_new, exchange_complete = manager.record_key_exchange(session_id, participant_id)
                 if is_new:
@@ -88,6 +95,7 @@ async def room_socket(websocket: WebSocket, session_id: str, participant_id: str
                     "type": "key_exchange",
                     "sender_id": participant_id,
                     "public_key": public_key,
+                    "signing_public_key": signing_public_key,
                     "sent_at": datetime.now(timezone.utc).isoformat(),
                 })
                 continue
@@ -119,8 +127,10 @@ async def room_socket(websocket: WebSocket, session_id: str, participant_id: str
             sequence = payload.get("sequence")
             nonce = payload.get("nonce")
             ciphertext = payload.get("ciphertext")
+            signature = payload.get("signature")
             nonce_bytes = decode_base64(nonce)
             ciphertext_bytes = decode_base64(ciphertext)
+            signature_bytes = decode_base64(signature)
 
             if not valid_integer(sequence, 1):
                 await websocket.send_json({"type": "error", "detail": "Message sequence is invalid."})
@@ -128,6 +138,9 @@ async def room_socket(websocket: WebSocket, session_id: str, participant_id: str
             max_ciphertext = MAX_IMAGE_CHUNK_CIPHERTEXT_BYTES if payload_type == "image_chunk" else 20000
             if len(nonce_bytes) != 12 or not 16 <= len(ciphertext_bytes) <= max_ciphertext:
                 await websocket.send_json({"type": "error", "detail": "Encrypted message format is invalid."})
+                continue
+            if payload_type == "message" and len(signature_bytes) != 64:
+                await websocket.send_json({"type": "error", "detail": "Message signature is missing or invalid."})
                 continue
 
             if payload_type == "image_chunk":
@@ -164,6 +177,12 @@ async def room_socket(websocket: WebSocket, session_id: str, participant_id: str
 
             sent_at = datetime.now(timezone.utc).isoformat()
             if payload_type == "message":
+                encryption_ms = payload.get("encryption_ms")
+                signature_generation_ms = payload.get("signature_generation_ms")
+                if not valid_duration(encryption_ms):
+                    encryption_ms = None
+                if not valid_duration(signature_generation_ms):
+                    signature_generation_ms = None
                 append_audit_log(session_id, "MESSAGE_SENT", participant_id, {"sequence": sequence})
                 await manager.broadcast(session_id, {
                     "type": "message",
@@ -171,6 +190,9 @@ async def room_socket(websocket: WebSocket, session_id: str, participant_id: str
                     "sequence": sequence,
                     "nonce": nonce,
                     "ciphertext": ciphertext,
+                    "signature": signature,
+                    "encryption_ms": encryption_ms,
+                    "signature_generation_ms": signature_generation_ms,
                     "sent_at": sent_at,
                 })
             else:

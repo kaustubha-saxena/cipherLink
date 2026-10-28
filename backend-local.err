@@ -1,0 +1,46 @@
+INFO:     Started server process [57752]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     ('127.0.0.1', 51989) - "WebSocket /ws/e7954f2d-c3a9-4334-b55b-09d89395d32e?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 61970) - "WebSocket /ws/e7954f2d-c3a9-4334-b55b-09d89395d32e?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 65177) - "WebSocket /ws/e57a6610-731e-43ff-b829-a51dcd78efef?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 52978) - "WebSocket /ws/e57a6610-731e-43ff-b829-a51dcd78efef?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 58381) - "WebSocket /ws/34b92882-b1c3-4307-aba3-59f3cf0f0dab?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 64898) - "WebSocket /ws/34b92882-b1c3-4307-aba3-59f3cf0f0dab?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 52876) - "WebSocket /ws/d3744c5f-fe20-4c6d-9ff1-beb893044e18?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 50728) - "WebSocket /ws/d3744c5f-fe20-4c6d-9ff1-beb893044e18?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 53954) - "WebSocket /ws/88caae9c-1ee9-41e2-b50f-8b164159b3a2?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 54517) - "WebSocket /ws/88caae9c-1ee9-41e2-b50f-8b164159b3a2?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 50212) - "WebSocket /ws/71c1e990-76df-47c8-8b9b-e9e104d5281d?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 53277) - "WebSocket /ws/71c1e990-76df-47c8-8b9b-e9e104d5281d?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 50444) - "WebSocket /ws/62213f6c-c109-4add-a4c5-0d041775e98a?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 54244) - "WebSocket /ws/62213f6c-c109-4add-a4c5-0d041775e98a?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed

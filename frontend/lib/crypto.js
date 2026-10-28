@@ -30,6 +30,16 @@ export async function createEphemeralKeyPair() {
   }
 }
 
+export async function createEphemeralSigningKeyPair() {
+  const pair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign", "verify"],
+  );
+  const publicBytes = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  return { privateKey: pair.privateKey, publicKey: toBase64(publicBytes) };
+}
+
 export async function deriveSessionMaterials(privateKey, peerPublicKey, sessionId) {
   const publicKey = await crypto.subtle.importKey("raw", fromBase64(peerPublicKey), { name: "X25519" }, false, []);
   const sharedSecretBytes = new Uint8Array(await crypto.subtle.deriveBits({ name: "X25519", public: publicKey }, privateKey, 256));
@@ -66,6 +76,92 @@ export async function encryptText(key, sessionId, sequence, text) {
 export async function decryptText(key, sessionId, sequence, nonce, ciphertext) {
   const plaintext = await decryptBytes(key, `${sessionId}:${sequence}`, nonce, ciphertext);
   return new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
+}
+
+function textEnvelope(sessionId, sequence, nonce, ciphertext) {
+  return textEncoder.encode(`CipherLink text signature v1\n${sessionId}\n${sequence}\n${nonce}\n${ciphertext}`);
+}
+
+export async function signTextEnvelope(privateKey, sessionId, sequence, nonce, ciphertext) {
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    privateKey,
+    textEnvelope(sessionId, sequence, nonce, ciphertext),
+  );
+  return toBase64(new Uint8Array(signature));
+}
+
+export async function verifyTextEnvelope(publicKeyBase64, sessionId, sequence, nonce, ciphertext, signatureBase64) {
+  const publicKey = await crypto.subtle.importKey(
+    "raw",
+    fromBase64(publicKeyBase64),
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["verify"],
+  );
+  return crypto.subtle.verify(
+    { name: "ECDSA", hash: "SHA-256" },
+    publicKey,
+    fromBase64(signatureBase64),
+    textEnvelope(sessionId, sequence, nonce, ciphertext),
+  );
+}
+
+export async function measureTextAnalysis(text, ciphertextBase64) {
+  const bytes = textEncoder.encode(text);
+  const ciphertextBytes = fromBase64(ciphertextBase64);
+  const hashStart = performance.now();
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const hashTimeMs = performance.now() - hashStart;
+  const digestHex = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
+
+  // These measurements are isolated experiments with disposable AES-CBC keys.
+  // The fixed IV is reused only for the paired diagnostic samples and never for chat data.
+  const probe = new Uint8Array(16);
+  probe.set(bytes.subarray(0, 16));
+  const flippedProbe = probe.slice();
+  flippedProbe[0] ^= 1;
+  const iv = crypto.getRandomValues(new Uint8Array(16));
+  const [keyA, keyB] = await Promise.all([
+    crypto.subtle.generateKey({ name: "AES-CBC", length: 256 }, false, ["encrypt"]),
+    crypto.subtle.generateKey({ name: "AES-CBC", length: 256 }, false, ["encrypt"]),
+  ]);
+  const [base, changedInput, changedKey] = await Promise.all([
+    crypto.subtle.encrypt({ name: "AES-CBC", iv }, keyA, probe),
+    crypto.subtle.encrypt({ name: "AES-CBC", iv }, keyA, flippedProbe),
+    crypto.subtle.encrypt({ name: "AES-CBC", iv }, keyB, probe),
+  ]);
+
+  function compareBlocks(leftBuffer, rightBuffer) {
+    const left = new Uint8Array(leftBuffer).subarray(0, 16);
+    const right = new Uint8Array(rightBuffer).subarray(0, 16);
+    let changedBits = 0;
+    let changedBytes = 0;
+    for (let index = 0; index < 16; index += 1) {
+      const difference = left[index] ^ right[index];
+      if (difference) changedBytes += 1;
+      for (let bit = difference; bit; bit &= bit - 1) changedBits += 1;
+    }
+    return { changedBitsPercent: (changedBits / 128) * 100, changedBytesPercent: (changedBytes / 16) * 100 };
+  }
+
+  const frequencies = new Uint32Array(256);
+  for (const byte of ciphertextBytes) frequencies[byte] += 1;
+  const ciphertextEntropy = ciphertextBytes.length
+    ? frequencies.reduce((entropy, count) => {
+      if (!count) return entropy;
+      const probability = count / ciphertextBytes.length;
+      return entropy - probability * Math.log2(probability);
+    }, 0)
+    : 0;
+
+  return {
+    digestHex,
+    hashTimeMs,
+    ciphertextEntropy,
+    confusion: compareBlocks(base, changedKey),
+    avalanche: compareBlocks(base, changedInput),
+  };
 }
 
 export async function encryptBytes(key, context, bytes) {
