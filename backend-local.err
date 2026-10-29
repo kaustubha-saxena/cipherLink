@@ -56,3 +56,9 @@ INFO:     ('127.0.0.1', 58389) - "WebSocket /ws/518e5715-eb3f-4a05-99df-5602ccce
 INFO:     connection open
 INFO:     connection closed
 INFO:     connection closed
+INFO:     ('127.0.0.1', 62618) - "WebSocket /ws/dcadece4-a1cb-4769-b150-eae557eb7e5f?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 62332) - "WebSocket /ws/dcadece4-a1cb-4769-b150-eae557eb7e5f?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
