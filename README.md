@@ -1,6 +1,6 @@
 # CipherLink
 
-CipherLink is a prototype for temporary, code-based sessions and two-person encrypted communication. It implements Phases 1-15 from the step-by-step process: a Next.js interface, FastAPI session management with SQLite, WebSocket relay, browser-side X25519/HKDF key agreement, AES-256-GCM encrypted text and image chunks, disconnect handling, chained audit logs, API rate limits, PyShark packet analysis, and a traffic dashboard.
+CipherLink is a prototype for temporary, code-based sessions and two-person encrypted communication. It implements the application features through Phase 17 and includes guided traffic-sniffing and tampering experiments: a Next.js interface, FastAPI session management with SQLite, WebSocket relay, browser-side X25519/HKDF key agreement, AES-256-GCM encrypted text and image chunks, disconnect handling, chained audit logs, API rate limits, PyShark packet analysis, and a traffic dashboard.
 
 ## Project structure
 
@@ -18,7 +18,7 @@ CipherLink is a prototype for temporary, code-based sessions and two-person encr
 
 The backend stores its SQLite database at `backend/cipherlink.db` by default. Set `CIPHERLINK_DB_PATH` to change it. Rooms last 10 minutes by default; `SESSION_TTL_SECONDS` changes the room lifetime.
 
-## Phases 14-15: capture, analyze, and view traffic
+## Phases 14-16: capture, analyze, and inspect encrypted traffic
 
 Install Wireshark with TShark on the computer whose network traffic you want to capture. In a PowerShell window at the repository root:
 
@@ -33,7 +33,7 @@ python traffic-analysis/analyzer.py traffic-analysis/cipherlink-test.pcapng --cs
 
 Replace `Wi-Fi` with an interface printed by `--list-interfaces`. Start the capture, use CipherLink during the selected interval, then open `/traffic-analysis` in the frontend and load the generated `.analysis.json` report. Live capture may require administrator permissions. Capturing the hosted HTTPS/WSS site normally shows TLS packet sizes, timing, endpoints, and TCP metadata; it does not reveal encrypted chat plaintext. The dashboard uses real capture reports and does not display fabricated metrics.
 
-The analyzer reports packet counts and sizes, protocol counts, endpoint flows, TCP retransmissions, TCP ACK RTT samples, bytes, duration, and throughput. ACK RTT is a transport-level estimate, not application-level end-to-end chat latency. PCAP files and reports may contain IP addresses and timing metadata; keep them private when they include real users.
+The analyzer reports packet counts and sizes, protocol counts, endpoint flows, TCP retransmissions, TCP ACK RTT samples, bytes, duration, and throughput. ACK RTT is a transport-level estimate, not application-level end-to-end chat latency. The dashboard plots RTT against the acknowledged TCP payload size; that is a segment measurement, not a reconstructed WebSocket message size. Text sent from this browser also contributes end-to-end delivery-acknowledgment RTT versus plaintext message-size samples, stored in local browser storage. For the controlled Phase 16 marker-message experiment and Phase 17 Device B tampering experiment, follow [docs/PHASES_15_17.md](docs/PHASES_15_17.md). PCAP files and reports may contain IP addresses and timing metadata; keep them private when they include real users.
 
 ## Current scope and security status
 

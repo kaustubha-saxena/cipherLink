@@ -20,6 +20,17 @@ def optional_field(layer, name: str):
         return None
 
 
+def tcp_analysis_field(tcp_layer, name: str):
+    """Read a Wireshark-generated TCP analysis field through PyShark."""
+    try:
+        value = tcp_layer.get_field_value(f"tcp.analysis.{name}")
+        if isinstance(value, list):
+            return str(value[0]) if value else None
+        return str(value) if value is not None else None
+    except (AttributeError, KeyError, TypeError):
+        return None
+
+
 def packet_to_sample(packet) -> dict:
     frame_length = int(packet.length)
     timestamp = float(packet.sniff_timestamp)
@@ -48,22 +59,27 @@ def packet_to_sample(packet) -> dict:
 
     tcp_payload_length = 0
     latency_ms = None
+    acknowledged_frame_number = None
     retransmission = False
     if "tcp" in layers:
         tcp_payload_length = int(optional_field(packet.tcp, "len") or 0)
-        analysis = getattr(packet.tcp, "analysis", None)
-        if analysis is not None:
-            retransmission = any(
-                optional_field(analysis, field) is not None
-                for field in ("retransmission", "fast_retransmission", "spurious_retransmission")
-            )
-            raw_rtt = optional_field(analysis, "ack_rtt")
-            try:
-                latency_ms = float(raw_rtt) * 1000 if raw_rtt is not None else None
-            except ValueError:
-                latency_ms = None
+        raw_acked_frame = tcp_analysis_field(packet.tcp, "acks_frame")
+        try:
+            acknowledged_frame_number = int(raw_acked_frame) if raw_acked_frame is not None else None
+        except ValueError:
+            acknowledged_frame_number = None
+        retransmission = any(
+            tcp_analysis_field(packet.tcp, field) is not None
+            for field in ("retransmission", "fast_retransmission", "spurious_retransmission")
+        )
+        raw_rtt = tcp_analysis_field(packet.tcp, "ack_rtt")
+        try:
+            latency_ms = float(raw_rtt) * 1000 if raw_rtt is not None else None
+        except ValueError:
+            latency_ms = None
 
     return {
+        "frame_number": int(packet.number),
         "timestamp": timestamp,
         "timestamp_utc": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
         "protocol": protocol,
@@ -72,6 +88,7 @@ def packet_to_sample(packet) -> dict:
         "destination": destination,
         "frame_length": frame_length,
         "tcp_payload_length": tcp_payload_length,
+        "acknowledged_frame_number": acknowledged_frame_number,
         "retransmission": retransmission,
         "latency_ms": latency_ms,
     }
@@ -90,6 +107,13 @@ def analyze_capture(capture_path: Path) -> tuple[dict, list[dict]]:
                 continue
     finally:
         capture.close()
+    payload_size_by_frame = {
+        sample["frame_number"]: sample["tcp_payload_length"]
+        for sample in samples if sample.get("frame_number") is not None
+    }
+    for sample in samples:
+        acknowledged_frame = sample.get("acknowledged_frame_number")
+        sample["latency_payload_length"] = payload_size_by_frame.get(acknowledged_frame)
     report = build_report(samples, capture_path.name)
     return report, samples
 

@@ -11,6 +11,7 @@ CSV_COLUMNS = (
     "destination",
     "frame_length_bytes",
     "tcp_payload_bytes",
+    "rtt_acked_payload_bytes",
     "retransmission",
     "latency_ms",
 )
@@ -38,6 +39,7 @@ def write_packet_csv(samples: list[dict], output_path: str | Path) -> Path:
                 "destination": sample.get("destination", ""),
                 "frame_length_bytes": sample["frame_length"],
                 "tcp_payload_bytes": sample.get("tcp_payload_length", 0),
+                "rtt_acked_payload_bytes": sample.get("latency_payload_length", ""),
                 "retransmission": sample.get("retransmission", False),
                 "latency_ms": sample.get("latency_ms", ""),
             })

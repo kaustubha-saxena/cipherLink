@@ -77,7 +77,7 @@ def build_report(samples: list[dict], source_capture: str) -> dict:
             "packet_size_distribution": size_distribution,
             "throughput_mbps_by_second": throughput_timeline,
             "latency_by_packet_size": [
-                {"packet_size_bytes": sample["frame_length"], "latency_ms": sample["latency_ms"]}
+                {"packet_size_bytes": sample.get("latency_payload_length", 0), "latency_ms": sample["latency_ms"]}
                 for sample in samples if sample.get("latency_ms") is not None
             ][:500],
             "top_flows": top_flows,

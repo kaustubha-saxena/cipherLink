@@ -44,3 +44,15 @@ INFO:     ('127.0.0.1', 54244) - "WebSocket /ws/62213f6c-c109-4add-a4c5-0d041775
 INFO:     connection open
 INFO:     connection closed
 INFO:     connection closed
+INFO:     ('127.0.0.1', 56982) - "WebSocket /ws/900b1092-46d5-479f-af34-b92b42a2b74d?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 63049) - "WebSocket /ws/900b1092-46d5-479f-af34-b92b42a2b74d?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 58446) - "WebSocket /ws/518e5715-eb3f-4a05-99df-5602ccce6964?participant_id=06637555-e277-4a60-a7a7-81a7f255206e" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 58389) - "WebSocket /ws/518e5715-eb3f-4a05-99df-5602ccce6964?participant_id=ee885395-fe57-42e0-9df0-8a66c3928837" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed

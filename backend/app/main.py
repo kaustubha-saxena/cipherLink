@@ -78,6 +78,26 @@ async def room_socket(websocket: WebSocket, session_id: str, participant_id: str
                 await websocket.send_json({"type": "pong", "sent_at": datetime.now(timezone.utc).isoformat()})
                 continue
 
+            if payload_type == "delivery_ack":
+                message_sender_id = payload.get("message_sender_id")
+                sequence = payload.get("sequence")
+                if (
+                    message_sender_id not in (latest_session["creator_id"], latest_session["participant_id"])
+                    or message_sender_id == participant_id
+                    or not valid_integer(sequence, 1)
+                    or manager.last_sequences[session_id].get(message_sender_id, 0) < sequence
+                    or not manager.accept_delivery_ack(session_id, message_sender_id, sequence)
+                ):
+                    await websocket.send_json({"type": "error", "detail": "Message delivery acknowledgement is invalid."})
+                    continue
+                await manager.broadcast(session_id, {
+                    "type": "delivery_ack",
+                    "message_sender_id": message_sender_id,
+                    "acknowledged_by": participant_id,
+                    "sequence": sequence,
+                })
+                continue
+
             if payload_type == "key_exchange":
                 public_key = payload.get("public_key")
                 public_key_bytes = decode_base64(public_key)

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const CHART_WIDTH = 620;
 const CHART_HEIGHT = 220;
+const DELIVERY_LATENCY_STORAGE_KEY = "cipherlink-delivery-latency-v1";
 
 function formatBytes(value) {
   if (!Number.isFinite(value)) return "-";
@@ -70,7 +71,7 @@ function LatencyScatter({ data }) {
   const maxSize = Math.max(...points.map((item) => item.packet_size_bytes), 1);
   const maxLatency = Math.max(...points.map((item) => item.latency_ms), 1);
   return <article className="traffic-chart-card">
-    <div className="traffic-chart-heading"><h2>TCP ACK RTT vs packet size</h2><span>{points.length} samples</span></div>
+    <div className="traffic-chart-heading"><h2>TCP ACK RTT vs acknowledged payload size</h2><span>{points.length} samples</span></div>
     {points.length === 0 ? <p className="traffic-empty-chart">TShark found no TCP ACK RTT samples for this capture.</p> : <div className="traffic-chart-scroll"><svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} role="img" aria-label="TCP acknowledgement round trip time versus packet size">
       <line x1="44" y1={CHART_HEIGHT - 30} x2={CHART_WIDTH - 20} y2={CHART_HEIGHT - 30} className="traffic-axis" />
       <line x1="44" y1="18" x2="44" y2={CHART_HEIGHT - 30} className="traffic-axis" />
@@ -83,7 +84,29 @@ function LatencyScatter({ data }) {
         return <circle key={`${point.packet_size_bytes}-${point.latency_ms}-${index}`} cx={x} cy={y} r="3" fill="#58d8f5" opacity=".72"><title>{point.packet_size_bytes} bytes, {point.latency_ms} ms ACK RTT</title></circle>;
       })}
     </svg></div>}
-    <p className="traffic-chart-footnote">ACK RTT is a TCP transport estimate, not application-level end-to-end chat latency.</p>
+    <p className="traffic-chart-footnote">Size is the TCP data payload acknowledged by each RTT sample, not a reconstructed chat message. ACK RTT is a transport-level estimate, not application-level end-to-end chat latency.</p>
+  </article>;
+}
+
+function MessageLatencyScatter({ data }) {
+  const points = data.slice(-250);
+  const maxSize = Math.max(...points.map((item) => item.message_size_bytes), 1);
+  const maxLatency = Math.max(...points.map((item) => item.latency_ms), 1);
+  return <article className="traffic-chart-card">
+    <div className="traffic-chart-heading"><h2>Message size vs delivery latency</h2><span>{points.length} samples</span></div>
+    {points.length === 0 ? <p className="traffic-empty-chart">Send text messages while both participants are connected to collect end-to-end delivery acknowledgements in this browser.</p> : <div className="traffic-chart-scroll"><svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} role="img" aria-label="Text message size in bytes versus end-to-end delivery acknowledgement round-trip time in milliseconds">
+      <line x1="44" y1={CHART_HEIGHT - 30} x2={CHART_WIDTH - 20} y2={CHART_HEIGHT - 30} className="traffic-axis" />
+      <line x1="44" y1="18" x2="44" y2={CHART_HEIGHT - 30} className="traffic-axis" />
+      <text x="46" y="14" className="traffic-chart-label">{maxLatency.toFixed(3)} ms</text>
+      <text x="44" y={CHART_HEIGHT - 8} className="traffic-chart-label">0 B</text>
+      <text x={CHART_WIDTH - 100} y={CHART_HEIGHT - 8} className="traffic-chart-label">{maxSize} B</text>
+      {points.map((point, index) => {
+        const x = 44 + (point.message_size_bytes / maxSize) * (CHART_WIDTH - 68);
+        const y = CHART_HEIGHT - 30 - (point.latency_ms / maxLatency) * (CHART_HEIGHT - 54);
+        return <circle key={`${point.sequence}-${point.recorded_at}-${index}`} cx={x} cy={y} r="4" fill="#91dc8c" opacity=".8"><title>{point.message_size_bytes} bytes, {point.latency_ms.toFixed(3)} ms delivery ACK RTT</title></circle>;
+      })}
+    </svg></div>}
+    <p className="traffic-chart-footnote">Measured on this sender: send to partner, successful signature verification and decryption, then acknowledgment back. Samples are saved locally in this browser.</p>
   </article>;
 }
 
@@ -101,6 +124,16 @@ function isReport(value) {
 export default function TrafficAnalysisPage() {
   const [report, setReport] = useState(null);
   const [error, setError] = useState("");
+  const [messageLatencySamples, setMessageLatencySamples] = useState([]);
+
+  useEffect(() => {
+    try {
+      const samples = JSON.parse(window.localStorage.getItem(DELIVERY_LATENCY_STORAGE_KEY) || "[]");
+      setMessageLatencySamples(Array.isArray(samples)
+        ? samples.filter((sample) => Number.isFinite(sample?.message_size_bytes) && Number.isFinite(sample?.latency_ms))
+        : []);
+    } catch { setMessageLatencySamples([]); }
+  }, []);
 
   async function loadReport(event) {
     const file = event.target.files?.[0];
@@ -122,9 +155,19 @@ export default function TrafficAnalysisPage() {
   return <main className="traffic-page">
     <header className="traffic-topbar"><a href="/" className="traffic-brand">CipherLink <span>/ Traffic analysis</span></a><a href="/" className="traffic-back">Back to chat</a></header>
     <section className="traffic-content">
-      <div className="traffic-intro"><div><span className="traffic-kicker">PHASE 14-15</span><h1>Traffic analysis</h1><p>Load a report generated from a Wireshark PCAP or PCAPNG capture. This dashboard displays measurements from that capture.</p></div>
+      <div className="traffic-intro"><div><span className="traffic-kicker">PHASE 14-16</span><h1>Traffic analysis</h1><p>Load a report generated from a Wireshark PCAP or PCAPNG capture. This dashboard displays measurements from that capture.</p></div>
         <label className="traffic-upload">Load JSON report<input type="file" accept="application/json,.json" onChange={loadReport} /></label>
       </div>
+      <details className="phase16-lab">
+        <summary>PHASE 16 · PACKET-SNIFFING EXPERIMENT</summary>
+        <ol>
+          <li>Start Wireshark on the active interface with capture filter <code>tcp port 443</code>.</li>
+          <li>Join the same hosted room on Device A and Device B. Send <code>Confidential message from Device A</code> and confirm B receives it.</li>
+          <li>Stop and save the capture. In Wireshark, apply <code>tls</code>, inspect TLS Application Data, then search for the marker with <code>frame contains &quot;Confidential message from Device A&quot;</code>. It should have no matching packet.</li>
+          <li>Generate a report with <code>python traffic-analysis/analyzer.py traffic-analysis/phase16-cipherlink.pcapng</code>, then load the resulting JSON here.</li>
+        </ol>
+        <p>For the full capture procedure and interpretation, see <code>docs/PHASES_15_17.md</code>. Captures still expose network endpoints, timing, and packet sizes.</p>
+      </details>
       {error && <div className="traffic-error" role="alert">{error}</div>}
       {!report && <section className="traffic-empty-state"><span>PCAP -&gt; PYSHARK -&gt; JSON</span><h2>No capture report loaded</h2><p>Capture traffic with <code>traffic-analysis/capture.py</code>, analyze the saved PCAPNG with <code>traffic-analysis/analyzer.py</code>, then load the generated <code>.analysis.json</code> report here.</p><p>The dashboard does not invent sample measurements. TShark must be installed for capture analysis.</p></section>}
       {report && <>
@@ -136,6 +179,7 @@ export default function TrafficAnalysisPage() {
           <MetricCard label="AVERAGE TCP ACK RTT" value={metrics.average_latency_ms == null ? "N/A" : `${metrics.average_latency_ms} ms`} detail={`${metrics.latency_sample_count} TCP RTT samples`} />
           <MetricCard label="AVERAGE THROUGHPUT" value={metrics.throughput_mbps == null ? "N/A" : `${metrics.throughput_mbps} Mbps`} detail="Captured bytes over capture duration" />
           <MetricCard label="RETRANSMISSIONS" value={metrics.retransmissions.toLocaleString()} detail={`${metrics.duration_seconds} seconds observed`} />
+          <MetricCard label="TLS PACKETS" value={(metrics.protocol_counts.TLS || 0).toLocaleString()} detail="TLS-layer packets detected in capture" />
         </section>
         <section className="traffic-charts-grid" aria-label="Traffic charts">
           <LineChart title="Packet count vs time" data={metrics.packet_count_by_second} valueKey="count" color="#58d8f5" formatValue={(value) => `${value} packets`} />
@@ -143,6 +187,7 @@ export default function TrafficAnalysisPage() {
           <ProtocolChart counts={metrics.protocol_counts} />
           <LineChart title="Throughput vs time" data={metrics.throughput_mbps_by_second} valueKey="mbps" color="#91dc8c" formatValue={(value) => `${value.toFixed(3)} Mbps`} />
           <LatencyScatter data={metrics.latency_by_packet_size} />
+          <MessageLatencyScatter data={messageLatencySamples} />
         </section>
         <section className="traffic-flows"><h2>Top network flows</h2><div className="traffic-flow-table"><table><thead><tr><th>Source</th><th>Destination</th><th>Transport</th><th>Packets</th></tr></thead><tbody>
           {metrics.top_flows.length === 0 && <tr><td colSpan={4}>No IP flows were decoded in this capture.</td></tr>}

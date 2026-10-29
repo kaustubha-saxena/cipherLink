@@ -8,6 +8,7 @@ import { analyzeImagePixels } from "@/lib/imageAnalysis";
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
 const IMAGE_CHUNK_BYTES = 48 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const DELIVERY_LATENCY_STORAGE_KEY = "cipherlink-delivery-latency-v1";
 
 function getIdentity() {
   let id = window.localStorage.getItem("cipherlink-participant-id");
@@ -120,6 +121,7 @@ function TextMetrics({ metrics }) {
         <div className="text-throughput-chart" role="img" aria-label="Encryption and decryption throughput comparison">
           {performanceRows.map((item) => <div className="text-throughput-row" key={item.label}><span>{item.label}</span><i><b style={{ width: `${Math.min(100, ((item.speed || 0) / maxSpeed) * 100)}%` }} /></i><strong>{metricSpeed(item.speed)}</strong></div>)}
         </div>
+        <small className="text-metrics-note">{metrics.received ? "End-to-end delivery ACK RTT is recorded in the sender's browser." : `End-to-end delivery ACK RTT: ${metricTime(metrics.deliveryAckRttMs)}. It measures from send until the partner authenticates, decrypts and acknowledges the message.`}</small>
         <small className="text-metrics-note">Bars compare encrypt and decrypt time and throughput. {metrics.received ? "Encryption is sender-reported; decryption is timed in this browser." : "Encryption is timed before sending; decryption is a local round-trip measurement."} Hardware and message size affect results.</small>
       </section>
       <section className="text-metrics-section">
@@ -201,6 +203,12 @@ function decodeBase64Bytes(value) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
+function encodeBase64Bytes(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return window.btoa(binary);
+}
+
 function combineByteArrays(parts) {
   const totalLength = parts.reduce((total, part) => total + part.length, 0);
   const combined = new Uint8Array(totalLength);
@@ -231,6 +239,10 @@ export default function Home() {
   const [audit, setAudit] = useState({ records: [], integrity_valid: true, first_bad_record: null });
   const [cipherRecords, setCipherRecords] = useState([]);
   const [imageProgress, setImageProgress] = useState(null);
+  const [tamperPlaintext, setTamperPlaintext] = useState("");
+  const [tamperExperiment, setTamperExperiment] = useState(null);
+  const [tamperBusy, setTamperBusy] = useState(false);
+  const [tamperError, setTamperError] = useState("");
   const [fileInputKey, setFileInputKey] = useState(0);
   const socketRef = useRef(null);
   const sendingRef = useRef(false);
@@ -245,6 +257,8 @@ export default function Home() {
   const incomingImagesRef = useRef(new Map());
   const objectUrlsRef = useRef(new Set());
   const imageInputRef = useRef(null);
+  const pendingTamperSequenceRef = useRef(null);
+  const pendingDeliveryMetricsRef = useRef(new Map());
 
   useEffect(() => setIdentity(getIdentity()), []);
 
@@ -261,11 +275,15 @@ export default function Home() {
     peerPublicKeyRef.current = null;
     peerSigningPublicKeyRef.current = null;
     pendingPeerPublicKeyRef.current = null;
+    pendingTamperSequenceRef.current = null;
     sendSequenceRef.current = 0;
     receiveSequencesRef.current = new Map();
+    pendingDeliveryMetricsRef.current = new Map();
     setConnection("Connecting");
     setCryptoStatus("Preparing browser key");
     setKeyFingerprint("");
+    setTamperExperiment(null);
+    setTamperError("");
     setHandshakeDetails(null);
 
     function sendPublicKey() {
@@ -340,6 +358,7 @@ export default function Home() {
         setConnection("Disconnected");
         setCryptoStatus("Session ended");
         sessionKeyRef.current = null;
+        pendingTamperSequenceRef.current = null;
       }
     };
     socket.onerror = () => setConnection("Connection issue");
@@ -347,6 +366,26 @@ export default function Home() {
       try {
         const payload = JSON.parse(event.data);
         if (payload.type === "pong") { lastPongAt = Date.now(); return; }
+        if (payload.type === "delivery_ack" && payload.message_sender_id === identity) {
+          const pending = pendingDeliveryMetricsRef.current.get(payload.sequence);
+          if (!pending) return;
+          pendingDeliveryMetricsRef.current.delete(payload.sequence);
+          const sample = {
+            sequence: payload.sequence,
+            message_size_bytes: pending.messageSizeBytes,
+            latency_ms: roundMilliseconds(performance.now() - pending.startedAt),
+            recorded_at: new Date().toISOString(),
+          };
+          setMessages((items) => items.map((message) => message.sequence === payload.sequence && message.sender_id === identity
+            ? { ...message, metrics: { ...message.metrics, deliveryAckRttMs: sample.latency_ms } }
+            : message));
+          try {
+            const previousSamples = JSON.parse(window.localStorage.getItem(DELIVERY_LATENCY_STORAGE_KEY) || "[]");
+            const validSamples = Array.isArray(previousSamples) ? previousSamples.filter((item) => Number.isFinite(item?.message_size_bytes) && Number.isFinite(item?.latency_ms)) : [];
+            window.localStorage.setItem(DELIVERY_LATENCY_STORAGE_KEY, JSON.stringify([...validSamples, sample].slice(-250)));
+          } catch { /* Latency charts are optional when browser storage is unavailable. */ }
+          return;
+        }
         if (payload.type === "message") {
           if (payload.sender_id === identity) return;
           setCipherRecords((items) => [{
@@ -384,6 +423,11 @@ export default function Home() {
             const text = await decryptText(sessionKeyRef.current, room.id, payload.sequence, payload.nonce, payload.ciphertext);
             const decryptionDurationMs = performance.now() - decryptStart;
             const decryptionMs = roundMilliseconds(decryptionDurationMs);
+            if (socket.readyState === WebSocket.OPEN) {
+              try {
+                socket.send(JSON.stringify({ type: "delivery_ack", message_sender_id: payload.sender_id, sequence: payload.sequence }));
+              } catch { /* A failed acknowledgement does not invalidate the decrypted message. */ }
+            }
             const analysis = await collectTextAnalysis(text, payload.ciphertext);
             const textBytes = new TextEncoder().encode(text).length;
             const metrics = {
@@ -400,7 +444,12 @@ export default function Home() {
             receiveSequencesRef.current.set(payload.sender_id, payload.sequence);
             setMessages((items) => [...items, { ...payload, message: text, metrics }]);
           } catch (error) {
-            setSecurityEvents((items) => [{ id: crypto.randomUUID(), label: "INTEGRITY CHECK FAILED", detail: error.message === "The message signature is invalid." ? error.message : "A modified or invalid encrypted message was rejected." }, ...items].slice(0, 5));
+            const detail = error.name === "OperationError"
+              ? "AES-GCM authentication failed. The altered ciphertext was rejected."
+              : error.message === "The message signature is invalid."
+                ? error.message
+                : "A modified or invalid encrypted message was rejected.";
+            setSecurityEvents((items) => [{ id: crypto.randomUUID(), label: "INTEGRITY CHECK FAILED", detail }, ...items].slice(0, 5));
             socket.send(JSON.stringify({ type: "security_event", event: "INTEGRITY_FAILURE", sequence: payload.sequence }));
           }
         }
@@ -484,7 +533,13 @@ export default function Home() {
           setConnection("Partner disconnected"); setCryptoStatus("Session ended"); sessionKeyRef.current = null;
           setError("Your partner disconnected. This room has ended.");
         }
-        if (payload.type === "security_event") setSecurityEvents((items) => [{ id: crypto.randomUUID(), label: payload.event.replaceAll("_", " "), detail: "A security event was recorded in the room audit log." }, ...items].slice(0, 5));
+        if (payload.type === "security_event") {
+          setSecurityEvents((items) => [{ id: crypto.randomUUID(), label: payload.event.replaceAll("_", " "), detail: "A security event was recorded in the room audit log." }, ...items].slice(0, 5));
+          if (payload.event === "INTEGRITY_FAILURE" && payload.actor_id !== identity && payload.details?.sequence === pendingTamperSequenceRef.current) {
+            pendingTamperSequenceRef.current = null;
+            setTamperExperiment((current) => current ? { ...current, deviceStatus: "Device B rejected the ciphertext. INTEGRITY_FAILURE is in the room audit log." } : current);
+          }
+        }
         if (payload.type === "error") {
           if (payload.code === "REPLAY_DETECTED") {
             setSecurityEvents((items) => [{ id: crypto.randomUUID(), label: "REPLAY DETECTED", detail: payload.detail }, ...items].slice(0, 5));
@@ -613,6 +668,7 @@ export default function Home() {
         ...analysis,
         encryptionMs,
         decryptionMs,
+        deliveryAckRttMs: null,
         encryptionBytesPerSecond: encryptionDurationMs > 0 ? textBytes / (encryptionDurationMs / 1000) : null,
         decryptionBytesPerSecond: decryptionDurationMs > 0 ? textBytes / (decryptionDurationMs / 1000) : null,
         signatureGenerationMs,
@@ -621,6 +677,7 @@ export default function Home() {
         received: false,
       };
       if (socketRef.current?.readyState !== WebSocket.OPEN) throw new Error("The connection was lost before the message could be sent.");
+      pendingDeliveryMetricsRef.current.set(sequence, { startedAt: performance.now(), messageSizeBytes: textBytes });
       socketRef.current.send(JSON.stringify({ type: "message", sequence, signature, encryption_ms: encryptionMs, signature_generation_ms: signatureGenerationMs, ...encrypted }));
       setCipherRecords((items) => [{
         id: crypto.randomUUID(),
@@ -635,10 +692,93 @@ export default function Home() {
       setMessages((items) => [...items, { sender_id: identity, message: text, sent_at: new Date().toISOString(), sequence, metrics }]);
       setDraft("");
     } catch (error) {
+      pendingDeliveryMetricsRef.current.delete(sequence);
       setError(error.message || "The encrypted message could not be sent.");
     } finally {
       sendingRef.current = false;
       setSending(false);
+    }
+  }
+
+  async function encryptTamperExperiment() {
+    const message = tamperPlaintext.trim();
+    if (!message || !sessionKeyRef.current || tamperBusy || sendingRef.current) return;
+    setTamperBusy(true);
+    setTamperError("");
+    try {
+      const sequence = sendSequenceRef.current + 1;
+      const encrypted = await encryptText(sessionKeyRef.current, room.id, sequence, message);
+      const ciphertextBytes = decodeBase64Bytes(encrypted.ciphertext);
+      const authenticationTagBytes = ciphertextBytes.slice(-16);
+      const authenticationTag = Array.from(authenticationTagBytes, (byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase().match(/.{1,2}/g).join(" ");
+      setTamperExperiment({ sequence, plaintext: message, nonce: encrypted.nonce, originalCiphertext: encodeBase64Bytes(ciphertextBytes.slice(0, -16)), originalPayload: encrypted.ciphertext, modifiedCiphertext: null, modifiedPayload: null, authenticationTag, authenticationTagBytes: Array.from(authenticationTagBytes), authenticationStatus: "NOT DECRYPTED", decryptionOutput: "Not decrypted", testResult: "Awaiting tampering test", deviceStatus: "Not sent to Device B" });
+    } catch (experimentError) {
+      setTamperError(experimentError.message || "The test message could not be encrypted.");
+    } finally {
+      setTamperBusy(false);
+    }
+  }
+
+  function simulateTampering() {
+    if (!tamperExperiment) return;
+    const ciphertextBytes = decodeBase64Bytes(tamperExperiment.originalCiphertext);
+    ciphertextBytes[0] ^= 1;
+    const modifiedPayload = encodeBase64Bytes(combineByteArrays([ciphertextBytes, Uint8Array.from(tamperExperiment.authenticationTagBytes)]));
+    setTamperExperiment((current) => ({ ...current, modifiedCiphertext: encodeBase64Bytes(ciphertextBytes), modifiedPayload, authenticationStatus: "NOT DECRYPTED", decryptionOutput: "Not decrypted", testResult: "Ready to verify tampering" }));
+  }
+
+  async function decryptTamperExperiment() {
+    if (!tamperExperiment || !sessionKeyRef.current || tamperBusy) return;
+    setTamperBusy(true);
+    const ciphertext = tamperExperiment.modifiedPayload || tamperExperiment.originalPayload;
+    const isTampered = Boolean(tamperExperiment.modifiedCiphertext);
+    try {
+      const plaintext = await decryptText(sessionKeyRef.current, room.id, tamperExperiment.sequence, tamperExperiment.nonce, ciphertext);
+      setTamperExperiment((current) => ({ ...current, authenticationStatus: "AUTHENTICATED", decryptionOutput: plaintext, testResult: isTampered ? "FAIL — altered ciphertext was accepted" : "PASS — untouched ciphertext recovered" }));
+    } catch {
+      setTamperExperiment((current) => ({ ...current, authenticationStatus: "AUTHENTICATION FAILED", decryptionOutput: "No plaintext released", testResult: isTampered ? "PASS — tampered ciphertext rejected" : "FAIL — untouched ciphertext could not be decrypted" }));
+    } finally {
+      setTamperBusy(false);
+    }
+  }
+
+  function resetTamperExperiment() {
+    setTamperExperiment((current) => current ? { ...current, modifiedCiphertext: null, modifiedPayload: null, authenticationStatus: "NOT DECRYPTED", decryptionOutput: "Not decrypted", testResult: "Reset — decrypt the original ciphertext" } : current);
+  }
+
+  function startNewTamperExperiment() {
+    if (pendingTamperSequenceRef.current !== null) return;
+    setTamperExperiment(null);
+    setTamperError("");
+  }
+
+  async function sendTamperedMessageToPartner() {
+    if (!tamperExperiment?.modifiedPayload || !keyPairRef.current?.signingKeyPair || !sessionKeyRef.current || socketRef.current?.readyState !== WebSocket.OPEN || tamperBusy) return;
+    if (connection !== "Partner connected") {
+      setTamperError("Connect Device B before sending the tampered message.");
+      return;
+    }
+    if (tamperExperiment.sequence !== sendSequenceRef.current + 1) {
+      setTamperError("Another outgoing frame used this sequence. Choose New Test, encrypt again, then send it before sending another message or image.");
+      return;
+    }
+    setTamperBusy(true);
+    setTamperError("");
+    try {
+      const signature = await signTextEnvelope(keyPairRef.current.signingKeyPair.privateKey, room.id, tamperExperiment.sequence, tamperExperiment.nonce, tamperExperiment.modifiedPayload);
+      if (socketRef.current?.readyState !== WebSocket.OPEN) throw new Error("The room connection was lost before the test could be sent.");
+      socketRef.current.send(JSON.stringify({ type: "message", sequence: tamperExperiment.sequence, nonce: tamperExperiment.nonce, ciphertext: tamperExperiment.modifiedPayload, signature }));
+      sendSequenceRef.current = tamperExperiment.sequence;
+      pendingTamperSequenceRef.current = tamperExperiment.sequence;
+      setCipherRecords((items) => [{
+        id: crypto.randomUUID(), direction: "SENT", kind: "TAMPER TEST", sequence: tamperExperiment.sequence,
+        nonce: tamperExperiment.nonce, ciphertext: tamperExperiment.modifiedPayload, loggedAt: new Date().toISOString(),
+      }, ...items].slice(0, 20));
+      setTamperExperiment((current) => ({ ...current, deviceStatus: "Altered ciphertext sent; waiting for Device B to reject it..." }));
+    } catch (sendError) {
+      setTamperError(sendError.message || "The tampered message could not be sent.");
+    } finally {
+      setTamperBusy(false);
     }
   }
 
@@ -787,6 +927,33 @@ export default function Home() {
               </button>
             </form>
             {imageProgress && <div className="image-progress">Encrypting and sending image  {imageProgress.done}/{imageProgress.total} chunks</div>}
+            <details className="tamper-test">
+              <summary>PHASE 17 · TAMPERING EXPERIMENT</summary>
+              <p>Encrypt a message, change one ciphertext byte, and verify AES-GCM rejects it locally and on Device B. The receiver logs INTEGRITY_FAILURE.</p>
+              <label className="tamper-input-label" htmlFor="phase17-message">Original plaintext</label>
+              <textarea id="phase17-message" value={tamperPlaintext} onChange={(event) => setTamperPlaintext(event.target.value)} maxLength={4000} placeholder="Enter a message to encrypt" disabled={Boolean(tamperExperiment)} />
+              <div className="tamper-actions">
+                <button type="button" onClick={encryptTamperExperiment} disabled={!tamperPlaintext.trim() || !sessionKeyRef.current || tamperBusy || Boolean(tamperExperiment)}>Encrypt</button>
+                <button type="button" onClick={simulateTampering} disabled={!tamperExperiment || Boolean(tamperExperiment.modifiedCiphertext) || tamperBusy}>Simulate Tampering</button>
+                <button type="button" onClick={decryptTamperExperiment} disabled={!tamperExperiment || tamperBusy}>Decrypt</button>
+                <button type="button" onClick={sendTamperedMessageToPartner} disabled={!tamperExperiment?.modifiedPayload || connection !== "Partner connected" || tamperBusy || pendingTamperSequenceRef.current !== null}>Send Tampered Message to Device B</button>
+                <button type="button" onClick={resetTamperExperiment} disabled={!tamperExperiment || tamperBusy}>Reset</button>
+                <button type="button" onClick={startNewTamperExperiment} disabled={!tamperExperiment || tamperBusy || pendingTamperSequenceRef.current !== null}>New Test</button>
+              </div>
+              {tamperError && <small className="tamper-inline-error" role="alert">{tamperError}</small>}
+              {tamperExperiment && <div className="tamper-results" aria-live="polite">
+                <div><strong>Original plaintext</strong><code>{tamperExperiment.plaintext}</code></div>
+                <div><strong>Original ciphertext</strong><code>{tamperExperiment.originalCiphertext}</code></div>
+                <div><strong>Nonce</strong><code>{tamperExperiment.nonce}</code></div>
+                <div><strong>Authentication tag</strong><code>{tamperExperiment.authenticationTag}</code></div>
+                <div><strong>Modified ciphertext</strong><code>{tamperExperiment.modifiedCiphertext || "Not modified"}</code></div>
+                <div><strong>Authentication status</strong><code className={tamperExperiment.authenticationStatus === "AUTHENTICATION FAILED" ? "tamper-failed" : tamperExperiment.authenticationStatus === "AUTHENTICATED" ? "tamper-passed" : ""}>{tamperExperiment.authenticationStatus}</code></div>
+                {tamperExperiment.authenticationStatus === "AUTHENTICATION FAILED" && <strong className="tamper-warning" role="alert">AUTHENTICATION FAILED</strong>}
+                <div><strong>Decryption output</strong><code>{tamperExperiment.decryptionOutput}</code></div>
+                <div><strong>Test result</strong><code className={tamperExperiment.testResult.startsWith("PASS") ? "tamper-passed" : tamperExperiment.testResult.startsWith("FAIL") ? "tamper-failed" : ""}>{tamperExperiment.testResult}</code></div>
+                <div><strong>Device B result</strong><code className={tamperExperiment.deviceStatus.includes("rejected") ? "tamper-passed" : ""}>{tamperExperiment.deviceStatus}</code></div>
+              </div>}
+            </details>
             </div><div className="room-side-panels"><aside className="audit-panel" aria-label="Room activity log">
               <div className="audit-heading"><div><span>SECURITY</span><h3>Room activity</h3></div><span className="audit-live"><i /> LIVE</span></div>
               <div className={audit.integrity_valid ? "audit-integrity" : "audit-integrity audit-invalid"}><span>{audit.integrity_valid ? "OK" : "!"}</span><div><strong>{audit.integrity_valid ? "HASH CHAIN VERIFIED" : "LOG INTEGRITY FAILURE"}</strong><small>{audit.integrity_valid ? "Recorded events match their audit chain." : `First inconsistent record: #${audit.first_bad_record ?? "?"}`}</small></div></div>
@@ -803,7 +970,7 @@ export default function Home() {
           </>}
           {error && <p className="error-message">{error}</p>}
         </div>}
-        <footer className="footer"><span>BUILT FOR CONVERSATIONS THAT DO NOT LINGER</span><span>PHASE 1-13 PROTOTYPE</span></footer>
+        <footer className="footer"><span>BUILT FOR CONVERSATIONS THAT DO NOT LINGER</span><span>PHASE 1-17 PROTOTYPE</span></footer>
       </section>
     </main>
   );

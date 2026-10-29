@@ -39,6 +39,7 @@ traffic-analysis/                 Wireshark/TShark capture and analysis tools
   requirements.txt                PyShark dependency
 
 README.md                          Setup, run, and traffic-analysis instructions
+docs/PHASES_15_17.md                Traffic-sniffing and tampering experiment steps
 do.txt                             Outstanding setup information, if any
 ans.txt                            User answers to setup questions
 
@@ -201,7 +202,26 @@ and timing data; treat them as potentially sensitive.
 
 README.md contains example commands to install traffic dependencies, capture
 while using the app, analyze the capture and load the generated .analysis.json
-file in the dashboard.
+file in the dashboard. The analyzer reads Wireshark-generated TCP ACK RTT fields
+through PyShark and matches each ACK sample to the acknowledged TCP data
+payload. The dashboard labels this as transport-level data, separate from the
+browser-measured delivery acknowledgment RTT versus plaintext text size.
+
+10. Phases 15-17 experiments
+----------------------------
+The traffic dashboard plots capture metrics and TCP ACK RTT against acknowledged
+payload size. For text sent from this browser, the receiver sends a WebSocket
+delivery acknowledgment only after successful signature verification and
+AES-GCM decryption. The sender measures this round trip and keeps up to 250
+message-size/latency samples in browser local storage for the traffic page.
+
+The Phase 16 instructions use Wireshark to capture a hosted WSS chat containing
+a known marker and search the capture bytes for that plaintext. The Phase 17
+panel encrypts a user-entered message, changes one ciphertext byte, and can
+send the altered envelope signed to Device B. Device B rejects it at AES-GCM
+authentication and sends INTEGRITY_FAILURE, which the backend records in the
+hash-chained audit log. Reset restores the original ciphertext for a successful
+decryption check. The full manual procedures are in docs/PHASES_15_17.md.
 
 8. Configuration variables
 --------------------------

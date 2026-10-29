@@ -8,6 +8,7 @@ class ConnectionManager:
         self.rooms: dict[str, set[WebSocket]] = defaultdict(set)
         self.last_sequences: dict[str, dict[str, int]] = defaultdict(dict)
         self.key_exchange_seen: dict[str, set[str]] = defaultdict(set)
+        self.delivery_acks: dict[str, set[tuple[str, int]]] = defaultdict(set)
 
     async def connect(self, room_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -21,6 +22,7 @@ class ConnectionManager:
                 self.rooms.pop(room_id, None)
                 self.last_sequences.pop(room_id, None)
                 self.key_exchange_seen.pop(room_id, None)
+                self.delivery_acks.pop(room_id, None)
 
     async def broadcast(self, room_id: str, payload: dict) -> None:
         for socket in list(self.rooms.get(room_id, set())):
@@ -42,6 +44,13 @@ class ConnectionManager:
             return False, len(participants) == 2
         participants.add(participant_id)
         return True, len(participants) == 2
+
+    def accept_delivery_ack(self, room_id: str, sender_id: str, sequence: int) -> bool:
+        key = (sender_id, sequence)
+        if key in self.delivery_acks[room_id]:
+            return False
+        self.delivery_acks[room_id].add(key)
+        return True
 
 
 manager = ConnectionManager()
