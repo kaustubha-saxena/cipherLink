@@ -6,7 +6,7 @@ CipherLink is a prototype for temporary, code-based sessions and two-person encr
 
 - `frontend/` - Next.js App Router interface
 - `backend/` - FastAPI REST and WebSocket server, SQLite persistence
-- `traffic-analysis/` - PyShark live capture, PCAP/PCAPNG analysis, CSV/JSON reports
+- `traffic-analysis/` - PyShark live capture, PCAP/PCAPNG analysis, CSV/JSON/XML reports
 - `attack-scripts/`, `benchmarks/`, `image-analysis/`, `docs/` - reserved for later phases
 
 ## Run locally
@@ -28,10 +28,10 @@ python -m venv traffic-analysis/.venv
 python -m pip install -r traffic-analysis/requirements.txt
 python traffic-analysis/capture.py --list-interfaces
 python traffic-analysis/capture.py --interface "Wi-Fi" --duration 60 --filter "port 443" --output traffic-analysis/cipherlink-test.pcapng
-python traffic-analysis/analyzer.py traffic-analysis/cipherlink-test.pcapng --csv traffic-analysis/cipherlink-packets.csv
+python traffic-analysis/analyzer.py traffic-analysis/cipherlink-test.pcapng --csv traffic-analysis/cipherlink-packets.csv --xml traffic-analysis/cipherlink-traffic.xml
 ```
 
-Replace `Wi-Fi` with an interface printed by `--list-interfaces`. Start the capture, use CipherLink during the selected interval, then open `/traffic-analysis` in the frontend and load the generated `.analysis.json` report. Live capture may require administrator permissions. Capturing the hosted HTTPS/WSS site normally shows TLS packet sizes, timing, endpoints, and TCP metadata; it does not reveal encrypted chat plaintext. The dashboard uses real capture reports and does not display fabricated metrics.
+Replace `Wi-Fi` with an interface printed by `--list-interfaces`. Start the capture, use CipherLink during the selected interval, then open `/traffic-analysis` in the frontend and load the generated `.analysis.json` report and packet CSV. The **Export as XML** button sends the already parsed report and packet rows to the FastAPI `/traffic-analysis/xml` endpoint; the endpoint does not reopen the PCAP. Live capture may require administrator permissions. Capturing the hosted HTTPS/WSS site normally shows TLS packet sizes, timing, endpoints, and TCP metadata; it does not reveal encrypted chat plaintext. The dashboard uses real capture reports and does not display fabricated metrics.
 
 The analyzer reports packet counts and sizes, protocol counts, endpoint flows, TCP retransmissions, TCP ACK RTT samples, bytes, duration, and throughput. ACK RTT is a transport-level estimate, not application-level end-to-end chat latency. The dashboard plots RTT against the acknowledged TCP payload size; that is a segment measurement, not a reconstructed WebSocket message size. Text sent from this browser also contributes end-to-end delivery-acknowledgment RTT versus plaintext message-size samples, stored in local browser storage. For the controlled Phase 16 marker-message experiment and Phase 17 Device B tampering experiment, follow [docs/PHASES_15_17.md](docs/PHASES_15_17.md). PCAP files and reports may contain IP addresses and timing metadata; keep them private when they include real users.
 

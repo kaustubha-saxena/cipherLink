@@ -23,10 +23,12 @@ backend/                          Python API and WebSocket relay
   app/main.py                     FastAPI app, WebSocket protocol and validation
   app/api/sessions.py             HTTP room and audit-log routes
   app/models/session.py           Pydantic request validation models
+  app/models/traffic.py           XML export request validation models
   app/database/db.py              SQLite connection and schema
   app/security/codes.py           Six-digit code generation and hashing
   app/services/sessions.py        Room lifecycle and database operations
   app/services/audit.py           Chained audit log creation and verification
+  app/services/traffic_reports.py XML report generation endpoint service
   app/utils/rate_limit.py         In-memory sliding-window request limiter
   app/websocket/manager.py        Live room sockets and replay tracking
   requirements.txt                Python backend dependencies
@@ -35,7 +37,7 @@ traffic-analysis/                 Wireshark/TShark capture and analysis tools
   capture.py                      Captures packets to PCAPNG using PyShark
   analyzer.py                     Parses PCAP/PCAPNG into packet samples
   metrics.py                      Aggregates samples into dashboard metrics
-  reports.py                      Writes JSON dashboard report and optional CSV
+  reports.py                      Writes JSON, CSV and XML traffic reports
   requirements.txt                PyShark dependency
 
 README.md                          Setup, run, and traffic-analysis instructions
@@ -207,13 +209,22 @@ through PyShark and matches each ACK sample to the acknowledged TCP data
 payload. The dashboard labels this as transport-level data, separate from the
 browser-measured delivery acknowledgment RTT versus plaintext text size.
 
-10. Phases 15-17 experiments
-----------------------------
+8. Phases 15-17 and XML export
+------------------------------
 The traffic dashboard plots capture metrics and TCP ACK RTT against acknowledged
 payload size. For text sent from this browser, the receiver sends a WebSocket
 delivery acknowledgment only after successful signature verification and
 AES-GCM decryption. The sender measures this round trip and keeps up to 250
 message-size/latency samples in browser local storage for the traffic page.
+
+The analyzer extracts packet number, timestamp, IP addresses, ports, protocol,
+frame size, TCP payload size, retransmission flags, and available RTTs. Its
+existing JSON report is unchanged; CSV retains its original columns and adds
+explicit packet number/IP/port fields. Use `--xml` to create an XML file in the
+same PyShark pass. The dashboard can also load the JSON and CSV, then POST the
+already parsed report and rows to `/traffic-analysis/xml` for a downloadable
+XML file without reopening the capture. Missing packet fields are omitted from
+the XML record.
 
 The Phase 16 instructions use Wireshark to capture a hosted WSS chat containing
 a known marker and search the capture bytes for that plaintext. The Phase 17
@@ -223,7 +234,7 @@ authentication and sends INTEGRITY_FAILURE, which the backend records in the
 hash-chained audit log. Reset restores the original ciphertext for a successful
 decryption check. The full manual procedures are in docs/PHASES_15_17.md.
 
-8. Configuration variables
+9. Configuration variables
 --------------------------
 
 NEXT_PUBLIC_API_URL (frontend): backend base URL used by the browser; local
@@ -233,7 +244,7 @@ CIPHERLINK_DB_PATH (backend): optional SQLite file path.
 SESSION_TTL_SECONDS (backend): room lifetime in seconds; default 600, minimum
 60.
 
-9. Security boundaries and limitations
+10. Security boundaries and limitations
 ---------------------------------------
 
 Browsers perform X25519 key agreement and AES-GCM encryption/decryption. The
@@ -245,7 +256,7 @@ not suitable for real sensitive communication. Rate-limit and replay state
 are in-memory and are not shared across backend workers. The code has not been
 independently security-audited; treat it as an educational prototype.
 
-10. Main data flows
+11. Main data flows
 -------------------
 
 Create a room:
@@ -272,6 +283,7 @@ Send a message:
 Analyze traffic:
 1. capture.py records packets to PCAPNG through TShark.
 2. analyzer.py parses packets and metrics.py summarizes network metadata.
-3. reports.py writes JSON (and optionally CSV); the dashboard loads the JSON.
+3. reports.py writes JSON, optional CSV and optional XML. The dashboard loads
+   JSON and packet CSV and can request XML from the backend without re-parsing.
 
 End of guide.

@@ -4,19 +4,21 @@ import math
 import os
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.sessions import router as sessions_router
 from app.database.db import initialize_database
+from app.models.traffic import TrafficXmlExportRequest
 from app.services.audit import append_audit_log
 from app.services.sessions import get_session, leave_session
+from app.services.traffic_reports import build_xml_report
 from app.websocket.manager import manager
 
 
 app = FastAPI(title="CipherLink API", version="0.1.0")
 allowed_origins = [origin.strip() for origin in os.environ.get("CIPHERLINK_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if origin.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
+app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Content-Type"], expose_headers=["Content-Disposition"])
 app.include_router(sessions_router)
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_CHUNKS = 214
@@ -48,6 +50,16 @@ def startup() -> None:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/traffic-analysis/xml")
+def export_traffic_xml(report: TrafficXmlExportRequest):
+    xml_content = build_xml_report(report)
+    return Response(
+        content=xml_content,
+        media_type="application/xml",
+        headers={"Content-Disposition": 'attachment; filename="cipherlink_traffic.xml"'},
+    )
 
 
 @app.websocket("/ws/{session_id}")

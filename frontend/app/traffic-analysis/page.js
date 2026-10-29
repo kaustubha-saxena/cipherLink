@@ -5,6 +5,67 @@ import { useEffect, useState } from "react";
 const CHART_WIDTH = 620;
 const CHART_HEIGHT = 220;
 const DELIVERY_LATENCY_STORAGE_KEY = "cipherlink-delivery-latency-v1";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (character === '"' && text[index + 1] === '"') { value += '"'; index += 1; }
+      else if (character === '"') quoted = false;
+      else value += character;
+    } else if (character === '"') quoted = true;
+    else if (character === ",") { row.push(value); value = ""; }
+    else if (character === "\n" || character === "\r") {
+      if (character === "\r" && text[index + 1] === "\n") index += 1;
+      row.push(value);
+      if (row.some((cell) => cell !== "")) rows.push(row);
+      row = []; value = "";
+    } else value += character;
+  }
+  row.push(value);
+  if (row.some((cell) => cell !== "")) rows.push(row);
+  if (rows.length < 2) throw new Error("The packet CSV has no packet records.");
+  const headers = rows[0].map((header) => header.trim().replace(/^\uFEFF/, ""));
+  return rows.slice(1).map((cells, index) => {
+    const values = Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? ""]));
+    const source = values.source || "";
+    const destination = values.destination || "";
+    const splitEndpoint = (endpoint, transport) => {
+      if (transport !== "TCP" && transport !== "UDP") return { ip: endpoint, port: null };
+      const separator = endpoint.lastIndexOf(":");
+      const maybePort = endpoint.slice(separator + 1);
+      return separator > 0 && /^\d+$/.test(maybePort)
+        ? { ip: endpoint.slice(0, separator), port: Number(maybePort) }
+        : { ip: endpoint, port: null };
+    };
+    const transport = (values.transport || "").toUpperCase();
+    const oldSource = splitEndpoint(source, transport);
+    const oldDestination = splitEndpoint(destination, transport);
+    const optionalNumber = (value) => value === "" || value == null ? null : Number(value);
+    const sourcePort = optionalNumber(values.source_port);
+    const destinationPort = optionalNumber(values.destination_port);
+    return {
+      packet_number: optionalNumber(values.packet_number) ?? index + 1,
+      timestamp_utc: values.timestamp_utc || null,
+      source_ip: values.source_ip || oldSource.ip || null,
+      destination_ip: values.destination_ip || oldDestination.ip || null,
+      source_port: sourcePort ?? oldSource.port,
+      destination_port: destinationPort ?? oldDestination.port,
+      protocol: values.protocol || null,
+      transport: values.transport || null,
+      frame_length_bytes: optionalNumber(values.frame_length_bytes),
+      tcp_payload_bytes: optionalNumber(values.tcp_payload_bytes),
+      retransmission: values.retransmission === "" ? null : values.retransmission.toLowerCase() === "true",
+      latency_ms: optionalNumber(values.latency_ms),
+      acknowledged_payload_bytes: optionalNumber(values.rtt_acked_payload_bytes),
+    };
+  });
+}
 
 function formatBytes(value) {
   if (!Number.isFinite(value)) return "-";
@@ -125,6 +186,9 @@ export default function TrafficAnalysisPage() {
   const [report, setReport] = useState(null);
   const [error, setError] = useState("");
   const [messageLatencySamples, setMessageLatencySamples] = useState([]);
+  const [packetRecords, setPacketRecords] = useState([]);
+  const [packetCsvText, setPacketCsvText] = useState("");
+  const [exportingXml, setExportingXml] = useState(false);
 
   useEffect(() => {
     try {
@@ -150,13 +214,82 @@ export default function TrafficAnalysisPage() {
     }
   }
 
+  async function loadPacketCsv(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const records = parseCsv(text);
+      setPacketCsvText(text);
+      setPacketRecords(records);
+      setError("");
+    } catch (loadError) {
+      setPacketCsvText("");
+      setPacketRecords([]);
+      setError(loadError.message || "Could not read that packet CSV.");
+    }
+  }
+
+  function downloadFile(contents, mimeType, filename) {
+    const url = URL.createObjectURL(new Blob([contents], { type: mimeType }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function exportXml() {
+    if (!report || packetRecords.length === 0 || exportingXml) return;
+    setExportingXml(true);
+    setError("");
+    try {
+      const metricSummary = Object.fromEntries(
+        ["packet_count", "total_bytes", "average_packet_size_bytes", "duration_seconds", "average_latency_ms", "latency_sample_count", "throughput_mbps", "retransmissions", "protocol_counts"]
+          .map((key) => [key, report.metrics[key]]),
+      );
+      const response = await fetch(`${API_URL}/traffic-analysis/xml`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          schema_version: report.schema_version,
+          generated_at: report.generated_at,
+          source_capture: report.source_capture,
+          metrics: metricSummary,
+          packets: packetRecords,
+        }),
+      });
+      if (!response.ok) {
+        const failure = await response.json().catch(() => ({}));
+        throw new Error(failure.detail || "The XML export could not be created.");
+      }
+      const xml = await response.blob();
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || "cipherlink_traffic.xml";
+      const url = URL.createObjectURL(xml);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (exportError) {
+      setError(exportError.message || "The XML export could not be created.");
+    } finally {
+      setExportingXml(false);
+    }
+  }
+
   const metrics = report?.metrics;
 
   return <main className="traffic-page">
     <header className="traffic-topbar"><a href="/" className="traffic-brand">CipherLink <span>/ Traffic analysis</span></a><a href="/" className="traffic-back">Back to chat</a></header>
     <section className="traffic-content">
       <div className="traffic-intro"><div><span className="traffic-kicker">PHASE 14-16</span><h1>Traffic analysis</h1><p>Load a report generated from a Wireshark PCAP or PCAPNG capture. This dashboard displays measurements from that capture.</p></div>
-        <label className="traffic-upload">Load JSON report<input type="file" accept="application/json,.json" onChange={loadReport} /></label>
+        <div className="traffic-file-controls">
+          <label className="traffic-upload">Load JSON report<input type="file" accept="application/json,.json" onChange={loadReport} /></label>
+          <label className="traffic-upload traffic-upload-secondary">Load packet CSV<input type="file" accept="text/csv,.csv" onChange={loadPacketCsv} /></label>
+        </div>
       </div>
       <details className="phase16-lab">
         <summary>PHASE 16 · PACKET-SNIFFING EXPERIMENT</summary>
@@ -164,14 +297,20 @@ export default function TrafficAnalysisPage() {
           <li>Start Wireshark on the active interface with capture filter <code>tcp port 443</code>.</li>
           <li>Join the same hosted room on Device A and Device B. Send <code>Confidential message from Device A</code> and confirm B receives it.</li>
           <li>Stop and save the capture. In Wireshark, apply <code>tls</code>, inspect TLS Application Data, then search for the marker with <code>frame contains &quot;Confidential message from Device A&quot;</code>. It should have no matching packet.</li>
-          <li>Generate a report with <code>python traffic-analysis/analyzer.py traffic-analysis/phase16-cipherlink.pcapng</code>, then load the resulting JSON here.</li>
+      <li>Generate reports with <code>python traffic-analysis/analyzer.py traffic-analysis/phase16-cipherlink.pcapng --csv traffic-analysis/phase16-cipherlink-packets.csv --xml traffic-analysis/phase16-cipherlink.xml</code>. Load the generated JSON and packet CSV here.</li>
         </ol>
         <p>For the full capture procedure and interpretation, see <code>docs/PHASES_15_17.md</code>. Captures still expose network endpoints, timing, and packet sizes.</p>
       </details>
       {error && <div className="traffic-error" role="alert">{error}</div>}
-      {!report && <section className="traffic-empty-state"><span>PCAP -&gt; PYSHARK -&gt; JSON</span><h2>No capture report loaded</h2><p>Capture traffic with <code>traffic-analysis/capture.py</code>, analyze the saved PCAPNG with <code>traffic-analysis/analyzer.py</code>, then load the generated <code>.analysis.json</code> report here.</p><p>The dashboard does not invent sample measurements. TShark must be installed for capture analysis.</p></section>}
+      {!report && <section className="traffic-empty-state"><span>PCAP -&gt; PYSHARK -&gt; JSON / CSV / XML</span><h2>No capture report loaded</h2><p>Capture traffic with <code>traffic-analysis/capture.py</code>, analyze the saved PCAPNG with <code>traffic-analysis/analyzer.py</code>, then load the generated JSON report and packet CSV. The XML export needs the packet CSV records.</p><p>The dashboard does not invent sample measurements. TShark must be installed for capture analysis.</p></section>}
       {report && <>
         <div className="traffic-report-meta"><span>Capture: <strong>{report.source_capture}</strong></span><span>Generated: <strong>{new Date(report.generated_at).toLocaleString()}</strong></span></div>
+        <div className="traffic-export-actions" aria-label="Traffic report exports">
+          <button type="button" onClick={() => downloadFile(JSON.stringify(report, null, 2), "application/json", "cipherlink_traffic.json")}>Export JSON</button>
+          <button type="button" onClick={() => downloadFile(packetCsvText, "text/csv;charset=utf-8", "cipherlink_traffic.csv")} disabled={!packetCsvText}>Export CSV</button>
+          <button type="button" onClick={exportXml} disabled={!packetRecords.length || exportingXml}>{exportingXml ? "Creating XML..." : "Export as XML"}</button>
+          <span>{packetRecords.length ? `${packetRecords.length.toLocaleString()} packet records loaded` : "Load the analyzer packet CSV to export individual XML records."}</span>
+        </div>
         <section className="traffic-metrics-grid" aria-label="Capture metrics">
           <MetricCard label="PACKETS CAPTURED" value={metrics.packet_count.toLocaleString()} detail="Frames in the capture" />
           <MetricCard label="TOTAL DATA" value={formatBytes(metrics.total_bytes)} detail={`${metrics.total_bytes.toLocaleString()} captured bytes`} />

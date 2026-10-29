@@ -9,7 +9,7 @@ except ImportError as error:
     raise SystemExit("PyShark is not installed. Run: python -m pip install -r traffic-analysis/requirements.txt") from error
 
 from metrics import build_report
-from reports import write_json_report, write_packet_csv
+from reports import write_json_report, write_packet_csv, write_xml_report
 
 
 def optional_field(layer, name: str):
@@ -40,10 +40,14 @@ def packet_to_sample(packet) -> dict:
 
     source = None
     destination = None
+    source_ip = None
+    destination_ip = None
     network = getattr(packet, "ip", None) or getattr(packet, "ipv6", None)
     if network is not None:
-        source = optional_field(network, "src")
-        destination = optional_field(network, "dst")
+        source_ip = optional_field(network, "src")
+        destination_ip = optional_field(network, "dst")
+        source = source_ip
+        destination = destination_ip
     if transport == "TCP":
         source_port = optional_field(packet.tcp, "srcport")
         destination_port = optional_field(packet.tcp, "dstport")
@@ -86,6 +90,10 @@ def packet_to_sample(packet) -> dict:
         "transport": transport,
         "source": source,
         "destination": destination,
+        "source_ip": source_ip,
+        "destination_ip": destination_ip,
+        "source_port": source_port,
+        "destination_port": destination_port,
         "frame_length": frame_length,
         "tcp_payload_length": tcp_payload_length,
         "acknowledged_frame_number": acknowledged_frame_number,
@@ -123,6 +131,7 @@ def main() -> int:
     parser.add_argument("capture", type=Path, help="Input .pcap or .pcapng capture")
     parser.add_argument("--json", dest="json_path", type=Path, help="JSON dashboard report (default: <capture>.analysis.json)")
     parser.add_argument("--csv", dest="csv_path", type=Path, help="Optional per-packet CSV export")
+    parser.add_argument("--xml", dest="xml_path", nargs="?", const="", help="Export packet metadata as XML (default: <capture>.analysis.xml)")
     args = parser.parse_args()
 
     try:
@@ -133,6 +142,10 @@ def main() -> int:
         if args.csv_path:
             write_packet_csv(samples, args.csv_path)
             print(f"Packet details -> {args.csv_path}")
+        if args.xml_path is not None:
+            xml_path = Path(args.xml_path) if args.xml_path else args.capture.with_suffix(".analysis.xml")
+            write_xml_report(report, samples, xml_path)
+            print(f"XML packet report -> {xml_path}")
         return 0
     except (FileNotFoundError, OSError, RuntimeError) as error:
         print(f"Analysis failed: {error}", file=sys.stderr)
