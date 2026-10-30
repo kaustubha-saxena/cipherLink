@@ -1,5 +1,7 @@
 const MAX_PREVIEW_EDGE = 64;
 const MAX_PREVIEW_PIXELS = MAX_PREVIEW_EDGE * MAX_PREVIEW_EDGE;
+const IMAGE_BENCHMARK_SIZES = [64, 128, 256, 512, 1024];
+const IMAGE_BENCHMARK_PASSES = 3;
 
 function asPixelPng(rgb, width, height) {
   const canvas = document.createElement("canvas");
@@ -98,9 +100,68 @@ async function differentialMetrics(rgb) {
   };
 }
 
+function median(values) {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+async function benchmarkScaledImages(bitmap) {
+  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  const results = [];
+
+  for (const edge of IMAGE_BENCHMARK_SIZES) {
+    const canvas = document.createElement("canvas");
+    canvas.width = edge;
+    canvas.height = edge;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.imageSmoothingEnabled = false;
+    context.drawImage(bitmap, 0, 0, edge, edge);
+    const rgba = context.getImageData(0, 0, edge, edge).data;
+    const pixels = new Uint8Array(edge * edge * 3);
+    for (let pixel = 0; pixel < edge * edge; pixel += 1) {
+      pixels[pixel * 3] = rgba[pixel * 4];
+      pixels[pixel * 3 + 1] = rgba[pixel * 4 + 1];
+      pixels[pixel * 3 + 2] = rgba[pixel * 4 + 2];
+    }
+
+    const encryptionPassMs = [];
+    const decryptionPassMs = [];
+    for (let pass = 0; pass < IMAGE_BENCHMARK_PASSES; pass += 1) {
+      const nonce = crypto.getRandomValues(new Uint8Array(12));
+      const encryptionStart = performance.now();
+      const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, tagLength: 128 }, key, pixels);
+      encryptionPassMs.push(performance.now() - encryptionStart);
+
+      const decryptionStart = performance.now();
+      const recovered = await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, tagLength: 128 }, key, ciphertext);
+      decryptionPassMs.push(performance.now() - decryptionStart);
+      if (recovered.byteLength !== pixels.byteLength) throw new Error("Image benchmark decryption verification failed.");
+    }
+
+    const meanEncryptionMs = encryptionPassMs.reduce((total, time) => total + time, 0) / encryptionPassMs.length;
+    const meanDecryptionMs = decryptionPassMs.reduce((total, time) => total + time, 0) / decryptionPassMs.length;
+    results.push({
+      edge,
+      pixelCount: edge * edge,
+      bytes: pixels.byteLength,
+      encryptionPassMs,
+      decryptionPassMs,
+      encryptionMeanMs: meanEncryptionMs,
+      encryptionMedianMs: median(encryptionPassMs),
+      decryptionMeanMs: meanDecryptionMs,
+      decryptionMedianMs: median(decryptionPassMs),
+      encryptionBytesPerSecond: meanEncryptionMs > 0 ? pixels.byteLength / (meanEncryptionMs / 1000) : null,
+      decryptionBytesPerSecond: meanDecryptionMs > 0 ? pixels.byteLength / (meanDecryptionMs / 1000) : null,
+    });
+  }
+  return results;
+}
+
 export async function analyzeImagePixels(imageBlob, encryptedBytes) {
   if (!imageBlob || !encryptedBytes?.length) throw new Error("Image analysis data is unavailable.");
   const bitmap = await createImageBitmap(imageBlob);
+  const benchmark = await benchmarkScaledImages(bitmap);
   const ratio = bitmap.width / bitmap.height;
   const encryptedPixelCount = Math.max(1, Math.min(MAX_PREVIEW_PIXELS, Math.floor(encryptedBytes.length / 3)));
   let width = Math.max(1, Math.min(MAX_PREVIEW_EDGE, Math.floor(Math.sqrt(encryptedPixelCount * ratio))));
@@ -153,5 +214,6 @@ export async function analyzeImagePixels(imageBlob, encryptedBytes) {
       psnr,
       changedPixelsRate: (changedPixels / (width * height)) * 100,
     },
+    benchmark,
   };
 }

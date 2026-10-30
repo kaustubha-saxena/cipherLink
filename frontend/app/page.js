@@ -160,6 +160,8 @@ function ImageMetrics({ analysis }) {
     <div className="image-analysis-content"><small className="image-metrics-note">{analysis?.error ? "Image analysis is unavailable in this browser. The image transfer completed normally." : "Preparing pixel previews and calculating image metrics..."}</small></div>
   </details>;
   const metrics = analysis.metrics;
+  const benchmarkRows = analysis.benchmark || [];
+  const largestBenchmark = benchmarkRows[benchmarkRows.length - 1];
   const performanceValues = [analysis.encryptionBytesPerSecond || 0, analysis.decryptionBytesPerSecond || 0];
   const maximumSpeed = Math.max(...performanceValues, 1);
   const formatPercent = (value) => Number.isFinite(value) ? `${value.toFixed(3)}%` : "Not available";
@@ -182,6 +184,32 @@ function ImageMetrics({ analysis }) {
         </div>
         <small className="image-metrics-note">Times cover AES-GCM operations, and speed uses the original file size. {analysis.received ? "Encryption is a local benchmark; decryption is timed on the received chunks." : "Encryption is timed during upload; decryption is a local round-trip measurement of the sent chunks."}</small>
       </section>
+      {largestBenchmark && <section className="image-metric-section">
+        <h4>3-pass image benchmark (AES-GCM)</h4>
+        <div className="image-benchmark-summary">
+          <div><span>Mean encryption · 1024 × 1024</span><strong>{metricTime(largestBenchmark.encryptionMeanMs)}</strong></div>
+          <div><span>Median encryption · 1024 × 1024</span><strong>{metricTime(largestBenchmark.encryptionMedianMs)}</strong></div>
+          <div><span>Mean decryption · 1024 × 1024</span><strong>{metricTime(largestBenchmark.decryptionMeanMs)}</strong></div>
+          <div><span>Median decryption · 1024 × 1024</span><strong>{metricTime(largestBenchmark.decryptionMedianMs)}</strong></div>
+        </div>
+        <div className="image-benchmark-table-wrap"><table className="image-benchmark-table">
+          <thead><tr><th>Scaled image size</th><th>Encryption mean / median</th><th>Decryption mean / median</th><th>Throughput enc / dec</th></tr></thead>
+          <tbody>{benchmarkRows.map((row) => <tr key={row.edge}>
+            <td>{row.edge} × {row.edge} px · {row.pixelCount.toLocaleString()} pixels</td>
+            <td>{metricTime(row.encryptionMeanMs)} / {metricTime(row.encryptionMedianMs)}</td>
+            <td>{metricTime(row.decryptionMeanMs)} / {metricTime(row.decryptionMedianMs)}</td>
+            <td>{metricSpeed(row.encryptionBytesPerSecond)} / {metricSpeed(row.decryptionBytesPerSecond)}</td>
+          </tr>)}</tbody>
+        </table></div>
+        {[{ title: "Image encryption time per pass · 1024 × 1024", values: largestBenchmark.encryptionPassMs }, { title: "Image decryption time per pass · 1024 × 1024", values: largestBenchmark.decryptionPassMs }].map((chart) => {
+          const maxTime = Math.max(...chart.values, 0.001);
+          return <div className="image-benchmark-chart" key={chart.title}>
+            <h5>{chart.title}</h5>
+            {chart.values.map((time, index) => <div className="image-benchmark-row" key={index}><span>Pass {index + 1}</span><i><em style={{ width: `${Math.max(2, (time / maxTime) * 100)}%` }} /></i><strong>{metricTime(time)}</strong></div>)}
+          </div>;
+        })}
+        <small className="image-metrics-note">Each pass encrypts and decrypts RGB pixel bytes using a fresh random 96-bit nonce and a temporary AES-GCM key. These are separate benchmark samples; they do not replace or alter the live image transfer.</small>
+      </section>}
       <section className="image-metric-section">
         <h4>Security metrics</h4>
         <div className="image-security-grid">

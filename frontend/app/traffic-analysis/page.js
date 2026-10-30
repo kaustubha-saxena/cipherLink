@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 
 const CHART_WIDTH = 620;
 const CHART_HEIGHT = 220;
+const MAX_CAPTURE_FILE_BYTES = 50 * 1024 * 1024;
 const DELIVERY_LATENCY_STORAGE_KEY = "cipherlink-delivery-latency-v1";
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
 
-function parseCsv(text) {
+function parseCsv(text, allowEmpty = false) {
   const rows = [];
   let row = [];
   let value = "";
@@ -29,7 +30,7 @@ function parseCsv(text) {
   }
   row.push(value);
   if (row.some((cell) => cell !== "")) rows.push(row);
-  if (rows.length < 2) throw new Error("The packet CSV has no packet records.");
+  if (rows.length < (allowEmpty ? 1 : 2)) throw new Error("The packet CSV has no packet records.");
   const headers = rows[0].map((header) => header.trim().replace(/^\uFEFF/, ""));
   return rows.slice(1).map((cells, index) => {
     const values = Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? ""]));
@@ -189,6 +190,7 @@ export default function TrafficAnalysisPage() {
   const [packetRecords, setPacketRecords] = useState([]);
   const [packetCsvText, setPacketCsvText] = useState("");
   const [exportingXml, setExportingXml] = useState(false);
+  const [analyzingCapture, setAnalyzingCapture] = useState(false);
 
   useEffect(() => {
     try {
@@ -211,6 +213,39 @@ export default function TrafficAnalysisPage() {
     } catch (loadError) {
       setReport(null);
       setError(loadError.message || "Could not read that report file.");
+    }
+  }
+
+  async function uploadCapture(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size > MAX_CAPTURE_FILE_BYTES) {
+      setError("Capture files must be 50 MB or smaller.");
+      return;
+    }
+    setAnalyzingCapture(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/traffic-analysis/analyze?filename=${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.detail || "The capture could not be analyzed.");
+      if (!isReport(result.report) || typeof result.packet_csv !== "string") {
+        throw new Error("The analyzer returned an unsupported report.");
+      }
+      const records = parseCsv(result.packet_csv, true);
+      setReport(result.report);
+      setPacketCsvText(result.packet_csv);
+      setPacketRecords(records);
+      setError("");
+    } catch (uploadError) {
+      setError(uploadError.message || "Could not analyze that capture.");
+    } finally {
+      setAnalyzingCapture(false);
     }
   }
 
@@ -285,8 +320,9 @@ export default function TrafficAnalysisPage() {
   return <main className="traffic-page">
     <header className="traffic-topbar"><a href="/" className="traffic-brand">CipherLink <span>/ Traffic analysis</span></a><a href="/" className="traffic-back">Back to chat</a></header>
     <section className="traffic-content">
-      <div className="traffic-intro"><div><span className="traffic-kicker">PHASE 14-16</span><h1>Traffic analysis</h1><p>Load a report generated from a Wireshark PCAP or PCAPNG capture. This dashboard displays measurements from that capture.</p></div>
+      <div className="traffic-intro"><div><span className="traffic-kicker">PHASE 14-16</span><h1>Traffic analysis</h1><p>Upload a PCAP or PCAPNG capture for direct analysis, or load an existing report. The dashboard displays measurements from that capture.</p></div>
         <div className="traffic-file-controls">
+          <label className="traffic-upload">{analyzingCapture ? "Analyzing capture..." : "Upload PCAP / PCAPNG"}<input type="file" accept=".pcap,.pcapng,application/vnd.tcpdump.pcap" onChange={uploadCapture} disabled={analyzingCapture} /></label>
           <label className="traffic-upload">Load JSON report<input type="file" accept="application/json,.json" onChange={loadReport} /></label>
           <label className="traffic-upload traffic-upload-secondary">Load packet CSV<input type="file" accept="text/csv,.csv" onChange={loadPacketCsv} /></label>
         </div>
@@ -297,12 +333,12 @@ export default function TrafficAnalysisPage() {
           <li>Start Wireshark on the active interface with capture filter <code>tcp port 443</code>.</li>
           <li>Join the same hosted room on Device A and Device B. Send <code>Confidential message from Device A</code> and confirm B receives it.</li>
           <li>Stop and save the capture. In Wireshark, apply <code>tls</code>, inspect TLS Application Data, then search for the marker with <code>frame contains &quot;Confidential message from Device A&quot;</code>. It should have no matching packet.</li>
-      <li>Generate reports with <code>python traffic-analysis/analyzer.py traffic-analysis/phase16-cipherlink.pcapng --csv traffic-analysis/phase16-cipherlink-packets.csv --xml traffic-analysis/phase16-cipherlink.xml</code>. Load the generated JSON and packet CSV here.</li>
+      <li>Upload the saved <code>.pcapng</code> file directly above. The API runs the existing PyShark analyzer and loads the report and packet records into this dashboard. CLI-generated JSON and CSV reports can still be loaded separately.</li>
         </ol>
         <p>For the full capture procedure and interpretation, see <code>docs/PHASES_15_17.md</code>. Captures still expose network endpoints, timing, and packet sizes.</p>
       </details>
       {error && <div className="traffic-error" role="alert">{error}</div>}
-      {!report && <section className="traffic-empty-state"><span>PCAP -&gt; PYSHARK -&gt; JSON / CSV / XML</span><h2>No capture report loaded</h2><p>Capture traffic with <code>traffic-analysis/capture.py</code>, analyze the saved PCAPNG with <code>traffic-analysis/analyzer.py</code>, then load the generated JSON report and packet CSV. The XML export needs the packet CSV records.</p><p>The dashboard does not invent sample measurements. TShark must be installed for capture analysis.</p></section>}
+      {!report && <section className="traffic-empty-state"><span>PCAP -&gt; PYSHARK -&gt; JSON / CSV / XML</span><h2>No capture report loaded</h2><p>Upload a <code>.pcap</code> or <code>.pcapng</code> file (up to 50 MB) above to analyze it here. You can also load existing JSON and packet CSV reports.</p><p>The capture is temporarily processed by the API server and deleted after analysis. TShark must be installed on that server.</p></section>}
       {report && <>
         <div className="traffic-report-meta"><span>Capture: <strong>{report.source_capture}</strong></span><span>Generated: <strong>{new Date(report.generated_at).toLocaleString()}</strong></span></div>
         <div className="traffic-export-actions" aria-label="Traffic report exports">

@@ -2,15 +2,19 @@ import base64
 import binascii
 import math
 import os
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import FastAPI, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 
 from app.api.sessions import router as sessions_router
 from app.database.db import initialize_database
 from app.models.traffic import TrafficXmlExportRequest
 from app.services.audit import append_audit_log
+from app.services.pcap_analysis import analyze_uploaded_capture
 from app.services.sessions import get_session, leave_session
 from app.services.traffic_reports import build_xml_report
 from app.websocket.manager import manager
@@ -23,6 +27,7 @@ app.include_router(sessions_router)
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_CHUNKS = 214
 MAX_IMAGE_CHUNK_CIPHERTEXT_BYTES = 48 * 1024 + 16
+MAX_PCAP_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
 def decode_base64(value: object) -> bytes:
@@ -50,6 +55,41 @@ def startup() -> None:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/traffic-analysis/analyze")
+async def analyze_capture_upload(request: Request, filename: str = Query(min_length=1, max_length=255)):
+    capture_name = Path(filename).name
+    suffix = Path(capture_name).suffix.lower()
+    if capture_name != filename or suffix not in {".pcap", ".pcapng"}:
+        raise HTTPException(status_code=415, detail="Choose a .pcap or .pcapng capture file.")
+
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > MAX_PCAP_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Capture files must be 50 MB or smaller.")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="cipherlink-upload-") as temp_dir:
+            capture_path = Path(temp_dir) / capture_name
+            total_bytes = 0
+            with capture_path.open("wb") as capture_file:
+                async for chunk in request.stream():
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_PCAP_UPLOAD_BYTES:
+                        raise HTTPException(status_code=413, detail="Capture files must be 50 MB or smaller.")
+                    capture_file.write(chunk)
+            if total_bytes == 0:
+                raise HTTPException(status_code=400, detail="The selected capture file is empty.")
+            report, packet_csv = await run_in_threadpool(analyze_uploaded_capture, capture_path)
+    except TimeoutError as error:
+        raise HTTPException(status_code=504, detail=str(error)) from error
+    except OverflowError as error:
+        raise HTTPException(status_code=413, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=f"Capture analysis failed: {error}") from error
+    return {"report": report, "packet_csv": packet_csv}
 
 
 @app.post("/traffic-analysis/xml")

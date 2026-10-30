@@ -65,9 +65,11 @@ WebSocket, performs key exchange, sends and receives encrypted text/images,
 renders chat bubbles, and displays the room audit and ciphertext tables. The
 ciphertext table is kept in browser state, not persisted by the backend.
 
-frontend/app/traffic-analysis/page.js lets the user select a JSON report and
-renders its metrics and charts. The browser does not parse PCAP; the Python
-analyzer creates the JSON first.
+frontend/app/traffic-analysis/page.js lets the user upload PCAP/PCAPNG captures
+directly to the backend, or load existing JSON/CSV reports, then renders their
+metrics and charts. The browser does not parse PCAP; the API runs the Python
+PyShark analyzer and returns the report and packet rows. The API server must
+have TShark installed for direct capture uploads.
 
 3. Browser cryptography: frontend/lib/crypto.js
 -----------------------------------------------
